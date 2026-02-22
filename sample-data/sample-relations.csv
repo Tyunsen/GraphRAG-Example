@@ -1,0 +1,19 @@
+subject,predicate,object,subject_type,object_type
+Python,是,编程语言,技术,类别
+JavaScript,是,编程语言,技术,类别
+Vue.js,基于,JavaScript,技术,技术
+React,基于,JavaScript,技术,技术
+D3.js,基于,JavaScript,技术,技术
+Python,用于,数据科学,技术,领域
+Python,用于,人工智能,技术,领域
+TensorFlow,使用,Python,技术,技术
+PyTorch,使用,Python,技术,技术
+Vue.js,用于,前端开发,技术,领域
+React,用于,前端开发,技术,领域
+D3.js,用于,数据可视化,技术,领域
+Guido van Rossum,创建了,Python,人物,技术
+Brendan Eich,创建了,JavaScript,人物,技术
+尤雨溪,创建了,Vue.js,人物,技术
+数据科学,属于,人工智能,领域,领域
+前端开发,属于,软件工程,领域,领域
+数据可视化,属于,数据科学,领域,领域

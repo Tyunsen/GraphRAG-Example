@@ -1,0 +1,38 @@
+{
+  "nodes": [
+    { "label": "爱因斯坦", "type": "人物", "properties": { "birth": "1879", "field": "物理学" } },
+    { "label": "牛顿", "type": "人物", "properties": { "birth": "1643", "field": "物理学" } },
+    { "label": "居里夫人", "type": "人物", "properties": { "birth": "1867", "field": "化学/物理" } },
+    { "label": "达尔文", "type": "人物", "properties": { "birth": "1809", "field": "生物学" } },
+    { "label": "相对论", "type": "理论", "properties": { "year": "1905" } },
+    { "label": "万有引力", "type": "理论", "properties": { "year": "1687" } },
+    { "label": "放射性", "type": "概念", "properties": { "year": "1898" } },
+    { "label": "进化论", "type": "理论", "properties": { "year": "1859" } },
+    { "label": "诺贝尔物理学奖", "type": "奖项" },
+    { "label": "诺贝尔化学奖", "type": "奖项" },
+    { "label": "物理学", "type": "学科" },
+    { "label": "生物学", "type": "学科" },
+    { "label": "普林斯顿大学", "type": "机构" },
+    { "label": "剑桥大学", "type": "机构" },
+    { "label": "巴黎大学", "type": "机构" }
+  ],
+  "edges": [
+    { "source": "爱因斯坦", "target": "相对论", "label": "提出" },
+    { "source": "爱因斯坦", "target": "诺贝尔物理学奖", "label": "获得" },
+    { "source": "爱因斯坦", "target": "普林斯顿大学", "label": "任职于" },
+    { "source": "爱因斯坦", "target": "物理学", "label": "研究领域" },
+    { "source": "牛顿", "target": "万有引力", "label": "发现" },
+    { "source": "牛顿", "target": "剑桥大学", "label": "任职于" },
+    { "source": "牛顿", "target": "物理学", "label": "研究领域" },
+    { "source": "居里夫人", "target": "放射性", "label": "研究" },
+    { "source": "居里夫人", "target": "诺贝尔物理学奖", "label": "获得" },
+    { "source": "居里夫人", "target": "诺贝尔化学奖", "label": "获得" },
+    { "source": "居里夫人", "target": "巴黎大学", "label": "任职于" },
+    { "source": "达尔文", "target": "进化论", "label": "提出" },
+    { "source": "达尔文", "target": "生物学", "label": "研究领域" },
+    { "source": "达尔文", "target": "剑桥大学", "label": "就读于" },
+    { "source": "相对论", "target": "物理学", "label": "属于" },
+    { "source": "万有引力", "target": "物理学", "label": "属于" },
+    { "source": "进化论", "target": "生物学", "label": "属于" }
+  ]
+}
