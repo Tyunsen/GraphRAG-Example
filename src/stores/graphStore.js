@@ -520,14 +520,25 @@ export const useGraphStore = defineStore('graph', () => {
       savedGraphs.value = await fetchGraphList()
       backendReady.value = true
       if (currentGraphId.value) {
-        const loaded = await loadGraph(currentGraphId.value)
-        if (!loaded) {
+        const exists = savedGraphs.value.some(item => item.id === currentGraphId.value)
+        if (!exists) {
           currentGraphId.value = null
           persistCurrentGraphId()
           if (savedGraphs.value.length > 0) {
             currentGraphId.value = savedGraphs.value[0].id
             persistCurrentGraphId()
             await loadGraph(currentGraphId.value)
+          }
+        } else {
+          const loaded = await loadGraph(currentGraphId.value)
+          if (!loaded) {
+            currentGraphId.value = null
+            persistCurrentGraphId()
+            if (savedGraphs.value.length > 0) {
+              currentGraphId.value = savedGraphs.value[0].id
+              persistCurrentGraphId()
+              await loadGraph(currentGraphId.value)
+            }
           }
         }
       } else if (savedGraphs.value.length > 0) {
