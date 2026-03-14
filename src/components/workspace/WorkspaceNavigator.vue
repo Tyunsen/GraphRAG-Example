@@ -201,31 +201,41 @@ async function removeSession(sessionId) {
 .session-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
   overflow-y: auto;
+  padding-right: 2px;
 }
 
 .session-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 42px;
-  border-radius: 10px;
-  background: transparent;
-  border: 1px solid transparent;
-  padding: 2px;
-  box-shadow: none;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  gap: 10px;
+  min-height: 48px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  padding: 4px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .session-item:hover {
-  background: rgba(255, 255, 255, 0.92);
-  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(148, 163, 184, 0.3);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 8px 18px rgba(15, 23, 42, 0.06);
+  transform: translateY(-1px);
 }
 
 .session-item.active {
-  background: rgba(79, 109, 245, 0.08);
-  border-color: rgba(79, 109, 245, 0.22);
+  background: linear-gradient(180deg, rgba(79, 109, 245, 0.12), rgba(79, 109, 245, 0.08));
+  border-color: rgba(79, 109, 245, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 10px 22px rgba(79, 109, 245, 0.12);
 }
 
 .session-main {
@@ -234,9 +244,9 @@ async function removeSession(sessionId) {
   align-items: center;
   min-width: 0;
   text-align: left;
-  min-height: 36px;
-  padding: 0 10px;
-  border-radius: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
   color: var(--color-text);
 }
 
@@ -244,31 +254,32 @@ async function removeSession(sessionId) {
   display: block;
   font-size: 12px;
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.45;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: rgba(15, 23, 42, 0.92);
 }
 
 .session-delete {
   flex-shrink: 0;
   align-self: stretch;
-  padding: 0 8px;
-  border-radius: 8px;
-  background: transparent;
-  color: rgba(220, 38, 38, 0.78);
+  padding: 0 10px;
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.72);
+  color: rgba(185, 28, 28, 0.78);
   font-size: 11px;
-  opacity: 0;
+  opacity: 0.45;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
 .session-item:hover .session-delete,
 .session-item.active .session-delete {
-  opacity: 0.9;
+  opacity: 1;
 }
 
 .session-delete:hover {
-  background: rgba(254, 242, 242, 0.88);
+  background: rgba(254, 242, 242, 0.96);
   color: var(--color-danger);
 }
 

@@ -40,6 +40,7 @@ router.post('/:graphId', (req, res) => {
       graphId: req.params.graphId,
       intentQuery: workspace.intentQuery || '',
       intentProfile: parseJson(workspace.intentProfile, {}),
+      extractionPrompt: workspace.extractionPrompt || '',
       files,
       options
     })

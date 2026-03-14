@@ -1,4 +1,5 @@
-import { getDB, saveToDisk } from './db.js'
+import { createHash } from 'crypto'
+import { getDB, saveToDiskSync } from './db.js'
 import { syncWorkspaceGraph } from './graphdb.js'
 import { buildKnowledgeRecords, rebuildCanonicalGraph, splitIntoParagraphs } from './knowledgePipeline.js'
 
@@ -27,6 +28,41 @@ function parseJson(value, fallback) {
   } catch {
     return fallback
   }
+}
+
+function computeContentHash(content = '') {
+  return createHash('sha256').update(String(content || ''), 'utf8').digest('hex')
+}
+
+function getWorkspaceGraphSummary(graphId) {
+  const graph = getRow('SELECT nodeCount, edgeCount FROM graphs WHERE id = ?', [graphId]) || {}
+  return {
+    nodeCount: Number(graph.nodeCount || 0),
+    edgeCount: Number(graph.edgeCount || 0)
+  }
+}
+
+export function findDuplicateWorkspaceFile(graphId, content = '', excludeFileId = '') {
+  const contentHash = computeContentHash(content)
+  const duplicate = getRow(
+    `
+    SELECT id, fileName, importedAt, contentHash
+    FROM files
+    WHERE graphId = ? AND contentHash = ? AND id != ?
+    ORDER BY importedAt DESC
+    LIMIT 1
+    `,
+    [graphId, contentHash, String(excludeFileId || '')]
+  )
+
+  return duplicate
+    ? {
+        fileId: duplicate.id,
+        fileName: duplicate.fileName,
+        importedAt: Number(duplicate.importedAt || 0),
+        contentHash
+      }
+    : null
 }
 
 export async function rebuildGraphDb(graphId) {
@@ -230,6 +266,8 @@ export async function persistImportedFile({
   content,
   fileType,
   fileSize,
+  importStatus = 'completed',
+  importMessage = '',
   nodes = [],
   edges = []
 }) {
@@ -243,18 +281,59 @@ export async function persistImportedFile({
   }
 
   const now = Date.now()
+  const contentHash = computeContentHash(content)
   const previous = getRow('SELECT id, fileName FROM files WHERE id = ? AND graphId = ?', [id, graphId])
   if (previous) {
     clearFileArtifacts(graphId, id, previous.fileName)
     run('DELETE FROM files WHERE id = ? AND graphId = ?', [id, graphId])
   }
 
+  const duplicate = getRow(
+    `
+    SELECT id, fileName, importedAt
+    FROM files
+    WHERE graphId = ? AND contentHash = ? AND id != ?
+    ORDER BY importedAt DESC
+    LIMIT 1
+    `,
+    [graphId, contentHash, id]
+  )
+  if (duplicate) {
+    return {
+      id,
+      skipped: true,
+      duplicateOf: {
+        fileId: duplicate.id,
+        fileName: duplicate.fileName,
+        importedAt: Number(duplicate.importedAt || 0),
+        contentHash
+      },
+      graph: getWorkspaceGraphSummary(graphId),
+      counts: {
+        entityMentionCount: 0,
+        eventMentionCount: 0,
+        relationMentionCount: 0
+      }
+    }
+  }
+
   run(
     `
-    INSERT INTO files (id, graphId, fileName, content, fileType, fileSize, importedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO files (id, graphId, fileName, content, fileType, fileSize, importedAt, contentHash, importStatus, importMessage)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
-    [id, graphId, fileName, content, fileType || 'txt', Number(fileSize || content.length), now]
+    [
+      id,
+      graphId,
+      fileName,
+      content,
+      fileType || 'txt',
+      Number(fileSize || content.length),
+      now,
+      contentHash,
+      String(importStatus || 'completed'),
+      String(importMessage || '')
+    ]
   )
 
   const records = buildKnowledgeRecords(graphId, id, fileName, content, nodes, edges, now)
@@ -265,7 +344,8 @@ export async function persistImportedFile({
   insertEventMentions(records.eventMentions)
   insertRelationMentions(records.relationMentions)
 
-  const graph = rebuildCanonicalGraph(graphId, allRows, run)
+  rebuildCanonicalGraph(graphId, allRows, run)
+  const graph = syncWorkspaceCounts(graphId)
   run(
     `
     INSERT OR REPLACE INTO import_history (id, graphId, fileName, timestamp, nodesAdded, edgesAdded)
@@ -281,7 +361,7 @@ export async function persistImportedFile({
     ]
   )
 
-  saveToDisk()
+  saveToDiskSync()
   await rebuildGraphDb(graphId)
 
   return {
@@ -304,8 +384,9 @@ export async function deleteImportedFile(graphId, fileId) {
   run('DELETE FROM files WHERE id = ? AND graphId = ?', [fileId, graphId])
   run('DELETE FROM import_history WHERE id = ? AND graphId = ?', [fileId, graphId])
 
-  const graph = rebuildCanonicalGraph(graphId, allRows, run)
-  saveToDisk()
+  rebuildCanonicalGraph(graphId, allRows, run)
+  const graph = syncWorkspaceCounts(graphId)
+  saveToDiskSync()
   await rebuildGraphDb(graphId)
   return graph
 }
@@ -313,7 +394,7 @@ export async function deleteImportedFile(graphId, fileId) {
 export function listWorkspaceFiles(graphId) {
   return allRows(
     `
-    SELECT id, graphId, fileName, fileType, fileSize, importedAt
+    SELECT id, graphId, fileName, fileType, fileSize, importedAt, importStatus, importMessage
     FROM files
     WHERE graphId = ?
     ORDER BY importedAt DESC
@@ -343,6 +424,26 @@ export function getFileDetail(fileId) {
   return { ...file, chunks }
 }
 
+export function syncWorkspaceCounts(graphId) {
+  const counts = getRow(
+    `
+    SELECT
+      (SELECT COUNT(*) FROM nodes WHERE graphId = ?) AS nodeCount,
+      (SELECT COUNT(*) FROM edges WHERE graphId = ?) AS edgeCount
+    `,
+    [graphId, graphId]
+  ) || {}
+
+  const nodeCount = Number(counts.nodeCount || 0)
+  const edgeCount = Number(counts.edgeCount || 0)
+  run(
+    'UPDATE graphs SET nodeCount = ?, edgeCount = ?, updatedAt = ? WHERE id = ?',
+    [nodeCount, edgeCount, Date.now(), graphId]
+  )
+
+  return { nodeCount, edgeCount }
+}
+
 function collectLinkedLabels(paragraph, nodes = []) {
   const linkedNodes = []
   const linkedEvents = []
@@ -358,13 +459,31 @@ function collectLinkedLabels(paragraph, nodes = []) {
   }
 }
 
+const NOISE_SEARCH_KEYWORDS = new Set([
+  '最近', '发生', '什么', '如何', '为何', '为什么', '情况', '相关',
+  '近伊', '朗发', '生了', '了什', '么', '问题', '消息'
+])
+
+function normalizeSearchKeyword(keyword = '') {
+  return String(keyword || '').trim().toLowerCase()
+}
+
+function isMeaningfulSearchKeyword(keyword = '') {
+  const normalized = normalizeSearchKeyword(keyword)
+  if (!normalized || normalized.length < 2) return false
+  if (NOISE_SEARCH_KEYWORDS.has(normalized)) return false
+  if (/^[^a-zA-Z\u4e00-\u9fff]+$/i.test(normalized)) return false
+  return true
+}
+
 function scoreParagraph(paragraph, keywords = [], linkedNodes = [], linkedEvents = []) {
   const contentLower = String(paragraph || '').toLowerCase()
   let score = 0
   const matchedKeywords = []
+  const meaningfulKeywords = keywords.filter(isMeaningfulSearchKeyword)
 
-  for (const keyword of keywords) {
-    const normalized = String(keyword || '').trim().toLowerCase()
+  for (const keyword of meaningfulKeywords) {
+    const normalized = normalizeSearchKeyword(keyword)
     if (!normalized) continue
     if (contentLower.includes(normalized)) {
       score += 2
@@ -372,7 +491,7 @@ function scoreParagraph(paragraph, keywords = [], linkedNodes = [], linkedEvents
     }
   }
 
-  for (const keyword of keywords) {
+  for (const keyword of meaningfulKeywords) {
     if (linkedNodes.includes(keyword) || linkedEvents.includes(keyword)) {
       score += 3
     }
@@ -380,7 +499,8 @@ function scoreParagraph(paragraph, keywords = [], linkedNodes = [], linkedEvents
 
   return {
     score,
-    matchedKeywords: [...new Set(matchedKeywords)]
+    matchedKeywords: [...new Set(matchedKeywords)],
+    meaningfulKeywordCount: meaningfulKeywords.length
   }
 }
 
@@ -414,11 +534,11 @@ export function searchWorkspaceFiles(graphId, keywords = []) {
     )
   }
 
-  const results = []
+  const dedupedResults = new Map()
   for (const chunk of chunks) {
     const linkedNodes = parseJson(chunk.linkedNodes, [])
     const linkedEvents = parseJson(chunk.linkedEvents, [])
-    const { score, matchedKeywords } = scoreParagraph(
+    const { score, matchedKeywords, meaningfulKeywordCount } = scoreParagraph(
       chunk.content,
       keywords,
       linkedNodes,
@@ -426,7 +546,12 @@ export function searchWorkspaceFiles(graphId, keywords = []) {
     )
 
     if (score <= 0) continue
-    results.push({
+    if (meaningfulKeywordCount === 0) continue
+
+    const hasGraphLinks = linkedNodes.length > 0 || linkedEvents.length > 0
+    if (!hasGraphLinks && score < 4) continue
+
+    const result = {
       chunkId: chunk.id,
       fileId: chunk.fileId,
       fileName: chunk.fileName,
@@ -436,9 +561,27 @@ export function searchWorkspaceFiles(graphId, keywords = []) {
       matchedKeywords,
       linkedNodes,
       linkedEvents
-    })
+    }
+
+    const dedupeKey = [
+      String(chunk.fileName || '').trim(),
+      Number(chunk.paragraphIndex || 0),
+      String(chunk.content || '').trim()
+    ].join('::')
+
+    if (!dedupedResults.has(dedupeKey)) {
+      dedupedResults.set(dedupeKey, result)
+      continue
+    }
+
+    const existing = dedupedResults.get(dedupeKey)
+    existing.score = Math.max(existing.score, result.score)
+    existing.matchedKeywords = [...new Set([...(existing.matchedKeywords || []), ...matchedKeywords])]
+    existing.linkedNodes = [...new Set([...(existing.linkedNodes || []), ...linkedNodes])]
+    existing.linkedEvents = [...new Set([...(existing.linkedEvents || []), ...linkedEvents])]
   }
 
+  const results = [...dedupedResults.values()]
   results.sort((a, b) => b.score - a.score || a.paragraphIndex - b.paragraphIndex)
   return results.slice(0, 12)
 }

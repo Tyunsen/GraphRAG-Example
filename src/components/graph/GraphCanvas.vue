@@ -6,11 +6,13 @@
 
     <GraphControls
       :current-layout="forceGraph.currentLayout.value"
+      :view-mode="graphStore.graphViewMode"
       @zoom-in="forceGraph.zoomIn()"
       @zoom-out="forceGraph.zoomOut()"
       @reset="forceGraph.resetZoom()"
       @fit="forceGraph.fitToView()"
       @layout="forceGraph.setLayout($event)"
+      @mode="graphStore.setGraphViewMode($event)"
     />
 
     <GraphLegend :types="graphStore.typeSet" />

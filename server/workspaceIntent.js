@@ -115,6 +115,26 @@ function expandKeywords(keywords = []) {
   return dedupe(expanded)
 }
 
+function normalizeIntentKeyword(value = '') {
+  return String(value || '')
+    .replace(/局势|形势|动态|情况|问题|事件|资料|信息|专题|观察|分析|研究|相关$/g, '')
+    .trim()
+}
+
+function deriveImplicitKeywords(intentSource = '', focusTopics = []) {
+  const derived = []
+  for (const aliasKey of Object.keys(KEYWORD_ALIASES)) {
+    if (intentSource.includes(aliasKey)) derived.push(aliasKey)
+  }
+
+  for (const topic of focusTopics) {
+    const normalized = normalizeIntentKeyword(topic)
+    if (normalized.length >= 2) derived.push(normalized)
+  }
+
+  return dedupe(derived)
+}
+
 function collectTypes(source, rules, fallback = []) {
   const matched = []
   for (const rule of rules) {
@@ -137,7 +157,10 @@ export function buildIntentProfile(intentQuery = '', intentSummary = '') {
 
   const entityTypes = collectTypes(source, ENTITY_RULES, ['人物', '组织', '地点', '设施', '国家', '概念'])
   const eventTypes = collectTypes(source, EVENT_RULES, ['军事打击', '外交谈判', '经济波动'])
-  const includeKeywords = extractConstraintTerms(intentSource, INCLUDE_PATTERNS)
+  const explicitIncludeKeywords = extractConstraintTerms(intentSource, INCLUDE_PATTERNS)
+  const includeKeywords = explicitIncludeKeywords.length > 0
+    ? explicitIncludeKeywords
+    : deriveImplicitKeywords(intentSource, focusTopics)
   const excludeKeywords = extractConstraintTerms(intentSource, EXCLUDE_PATTERNS)
 
   return {
@@ -154,6 +177,59 @@ export function buildIntentProfile(intentQuery = '', intentSummary = '') {
     qaStyle: 'evidence-first',
     generatedAt: Date.now()
   }
+}
+
+function formatPromptList(values = [], fallback = '无') {
+  const items = Array.isArray(values)
+    ? values.map(item => String(item || '').trim()).filter(Boolean)
+    : []
+  return items.length > 0 ? items.join('、') : fallback
+}
+
+export function buildExtractionPrompt(intentQuery = '', intentSummary = '', intentProfile = null) {
+  const profile = intentProfile || buildIntentProfile(intentQuery, intentSummary)
+  const focusTopics = formatPromptList(profile.focusTopics, '围绕工作区意图判断')
+  const entityTypes = formatPromptList(profile.entityTypes, '人物、组织、地点、设施、国家、概念')
+  const eventTypes = formatPromptList(profile.eventTypes, '军事打击、外交谈判、经济波动')
+  const allowedRelations = formatPromptList(profile.allowedRelations, '发起、执行、参与、针对、导致、回应')
+  const includeKeywords = formatPromptList(profile.includeKeywords, '无强制限定')
+  const excludeKeywords = formatPromptList(profile.excludeKeywords, '无')
+  const intentLine = String(intentQuery || '').trim() || '未提供工作区意图'
+
+  return `你是中文知识图谱抽取器，正在为一个工作区构建“实体 + 事件”图谱。
+
+工作区总意图：${intentLine}
+重点主题：${focusTopics}
+重点实体类型：${entityTypes}
+重点事件类型：${eventTypes}
+允许关系类型：${allowedRelations}
+必须优先保留的关键词：${includeKeywords}
+需要忽略的关键词：${excludeKeywords}
+
+执行要求：
+1. 只抽取与工作区意图直接相关的实体、事件和关系，无关内容直接忽略。
+2. 事件节点必须使用 type="事件"，并尽量抽成清晰的主谓宾或主谓结构。
+3. 实体节点尽量稳定命名，避免生成碎片词、重复短语、无意义共现词。
+4. 如果文本中没有足够证据支持某个节点或关系，不要猜测。
+5. 输出必须是合法 JSON，对象格式固定为 { "nodes": [...], "edges": [...] }。
+
+节点要求：
+- 实体节点格式：{"label":"节点名","type":"人物|组织|地点|设施|国家|概念|经济指标"}
+- 事件节点格式：{"label":"事件摘要","type":"事件","properties":{"predicate":"谓语","summary":"简短摘要"}}
+
+关系要求：
+- 只要关系涉及事件节点，label 必须从以下集合中选择：发起、执行、参与、指挥、针对、发生于、影响、支持、反对、宣布、导致、触发、升级、回应、依赖、推动、阻碍、停止。
+- 实体到实体关系保持简短明确，不要生成“共现”“相关”这类噪声关系。
+
+返回格式：
+{
+  "nodes": [
+    {"label": "节点名", "type": "人物|组织|地点|设施|国家|概念|经济指标|事件", "properties": {}}
+  ],
+  "edges": [
+    {"source": "节点1", "target": "节点2", "label": "关系", "properties": {}}
+  ]
+}`
 }
 
 function splitParagraphs(content = '') {

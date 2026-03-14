@@ -1,8 +1,9 @@
 import { Router } from 'express'
-import { getDB, saveToDisk } from '../db.js'
+import { getDB, saveToDisk, saveToDiskSync } from '../db.js'
 import { deleteWorkspaceGraph, queryWorkspaceSubgraph, syncWorkspaceGraph } from '../graphdb.js'
+import { syncWorkspaceCounts } from '../fileGraphService.js'
 import { makeStableId, rebuildCanonicalGraph } from '../knowledgePipeline.js'
-import { buildIntentProfile } from '../workspaceIntent.js'
+import { buildExtractionPrompt, buildIntentProfile } from '../workspaceIntent.js'
 
 const router = Router()
 
@@ -37,6 +38,54 @@ function parseJsonArray(value) {
   if (Array.isArray(value)) return value
   const parsed = parseJson(value, [])
   return Array.isArray(parsed) ? parsed : []
+}
+
+function stripCanonicalPrefix(value = '') {
+  return String(value || '').replace(/^(entity|event):/i, '').trim()
+}
+
+function tokenizeSearchText(value = '') {
+  return String(value || '')
+    .split(/[、,，；;：:\s/]+/)
+    .map(item => String(item || '').trim())
+    .filter(item => item.length >= 2)
+}
+
+function parseEventPhrase(value = '') {
+  const text = String(value || '').trim()
+  if (!text) return []
+
+  const predicates = [
+    '持续打击', '联合打击', '发动打击', '直接打击', '空袭', '袭击', '施压', '封锁',
+    '威胁封锁', '拦截', '发射', '报复', '回应', '谈判', '停火', '声明', '会谈',
+    '伤亡', '遇袭', '受损', '死亡'
+  ].sort((a, b) => b.length - a.length)
+
+  for (const predicate of predicates) {
+    const index = text.indexOf(predicate)
+    if (index <= 0) continue
+    const subject = text.slice(0, index).trim()
+    const object = text.slice(index + predicate.length).trim()
+    return [subject, predicate, object].filter(item => item.length >= 2)
+  }
+
+  if (text.endsWith('死亡') && text.length > 2) {
+    return [text.slice(0, -2).trim(), '死亡'].filter(item => item.length >= 2)
+  }
+
+  return tokenizeSearchText(text)
+}
+
+function buildSearchTexts(values = []) {
+  const output = new Set()
+  for (const value of values || []) {
+    const text = String(value || '').trim()
+    if (!text) continue
+    if (text.length >= 2) output.add(text)
+    for (const token of tokenizeSearchText(text)) output.add(token)
+    for (const token of parseEventPhrase(text)) output.add(token)
+  }
+  return [...output]
 }
 
 async function rebuildGraphDb(graphId) {
@@ -79,11 +128,43 @@ function reconcileWorkspaceSourceState(graphId) {
   return true
 }
 
+function reconcileWorkspaceCounts(graphId) {
+  const actual = syncWorkspaceCounts(graphId)
+  const meta = getRow('SELECT nodeCount, edgeCount FROM graphs WHERE id = ?', [graphId]) || {}
+  return (
+    Number(meta.nodeCount || 0) !== Number(actual.nodeCount || 0) ||
+    Number(meta.edgeCount || 0) !== Number(actual.edgeCount || 0)
+  )
+}
+
 function deleteWorkspaceFileArtifacts(graphId) {
   run('DELETE FROM file_chunks WHERE graphId = ?', [graphId])
   run('DELETE FROM files WHERE graphId = ?', [graphId])
   run('DELETE FROM file_nodes WHERE graphId = ?', [graphId])
   run('DELETE FROM file_edges WHERE graphId = ?', [graphId])
+}
+
+function ensureWorkspaceExtractionPrompt(graph) {
+  if (!graph) return graph
+  const storedIntentProfile = parseJson(graph.intentProfile, {})
+  const intentProfile = buildIntentProfile(graph.intentQuery || '', graph.intentSummary || '')
+  const extractionPrompt = String(graph.extractionPrompt || '').trim()
+    || buildExtractionPrompt(graph.intentQuery || '', graph.intentSummary || '', intentProfile)
+
+  const shouldSyncProfile = JSON.stringify(storedIntentProfile) !== JSON.stringify(intentProfile)
+  if (shouldSyncProfile || !String(graph.extractionPrompt || '').trim()) {
+    run(
+      'UPDATE graphs SET intentProfile = ?, extractionPrompt = ?, updatedAt = ? WHERE id = ?',
+      [JSON.stringify(intentProfile), extractionPrompt, Date.now(), graph.id]
+    )
+    graph.extractionPrompt = extractionPrompt
+  }
+
+  return {
+    ...graph,
+    intentProfile,
+    extractionPrompt
+  }
 }
 
 function getCanonicalNodeExplain(graphId, nodeId) {
@@ -133,7 +214,7 @@ function buildEvidenceSummary(kind, graphId, canonical, mergedKeys = []) {
 
   const rows = allRows(
     `
-    SELECT fileId, fileName, canonicalKey, label, summary, paragraphRefs, confidence, createdAt
+    SELECT fileId, fileName, canonicalKey, label, summary, subjectKeys, predicateText, objectKeys, paragraphRefs, confidence, createdAt
     FROM event_mentions
     WHERE graphId = ?
     `,
@@ -146,29 +227,64 @@ function buildEvidenceSummary(kind, graphId, canonical, mergedKeys = []) {
       sourceCanonicalKey: row.canonicalKey,
       mentionText: row.label,
       summary: row.summary,
+      subjectKeys: parseJsonArray(row.subjectKeys),
+      predicateText: row.predicateText || '',
+      objectKeys: parseJsonArray(row.objectKeys),
       paragraphRefs: parseJsonArray(row.paragraphRefs),
       confidence: Number(row.confidence || 0),
       createdAt: Number(row.createdAt || 0)
     }))
 }
 
-function loadParagraphDetails(graphId, fileId, paragraphRefs = []) {
+function loadParagraphDetails(graphId, fileId, paragraphRefs = [], matchTexts = []) {
   const indexes = [...new Set(paragraphRefs.map(item => Number(item)).filter(item => Number.isInteger(item) && item > 0))]
-  if (indexes.length === 0) return []
+  const normalizedMatches = buildSearchTexts(matchTexts)
 
-  const placeholders = indexes.map(() => '?').join(', ')
-  return allRows(
-    `
-    SELECT paragraphIndex, content
-    FROM file_chunks
-    WHERE graphId = ? AND fileId = ? AND chunkKind = 'paragraph' AND paragraphIndex IN (${placeholders})
-    ORDER BY paragraphIndex ASC
-    `,
-    [graphId, fileId, ...indexes]
-  ).map(row => ({
+  const rows = (() => {
+    if (indexes.length > 0) {
+      const placeholders = indexes.map(() => '?').join(', ')
+      return allRows(
+        `
+        SELECT paragraphIndex, content
+        FROM file_chunks
+        WHERE graphId = ? AND fileId = ? AND chunkKind = 'paragraph' AND paragraphIndex IN (${placeholders})
+        ORDER BY paragraphIndex ASC
+        `,
+        [graphId, fileId, ...indexes]
+      )
+    }
+
+    return allRows(
+      `
+      SELECT paragraphIndex, content
+      FROM file_chunks
+      WHERE graphId = ? AND fileId = ? AND chunkKind = 'paragraph'
+      ORDER BY paragraphIndex ASC
+      `,
+      [graphId, fileId]
+    )
+    .slice(0, 48)
+  })().map(row => ({
     paragraphIndex: Number(row.paragraphIndex || 0),
     content: row.content || ''
   }))
+
+  if (rows.length === 0) return []
+  if (normalizedMatches.length === 0) return indexes.length > 0 ? rows : rows.slice(0, 2)
+
+  const scoredRows = rows
+    .map(row => ({
+      ...row,
+      score: normalizedMatches.reduce((count, text) => count + (row.content.includes(text) ? 1 : 0), 0)
+    }))
+    .filter(row => row.score > 0)
+    .sort((left, right) => right.score - left.score || left.paragraphIndex - right.paragraphIndex)
+
+  if (scoredRows.length > 0) {
+    return scoredRows.slice(0, indexes.length > 0 ? rows.length : 3).map(({ score, ...row }) => row)
+  }
+
+  return indexes.length > 0 ? rows : []
 }
 
 function buildMergeReason(kind, canonical, evidence) {
@@ -194,11 +310,47 @@ function buildMergeReason(kind, canonical, evidence) {
 }
 
 function enrichEvidenceSummary(kind, graphId, canonical, evidence = []) {
-  return evidence.map(item => ({
-    ...item,
-    mergeReason: buildMergeReason(kind, canonical, item),
-    paragraphs: loadParagraphDetails(graphId, item.fileId, item.paragraphRefs)
-  }))
+  const roleTexts = [
+    ...(canonical?.subjectKeys || []).map(stripCanonicalPrefix),
+    ...(canonical?.objectKeys || []).map(stripCanonicalPrefix)
+  ]
+
+  return evidence
+    .map(item => {
+      const itemRoleTexts = [
+        ...(item.subjectKeys || []).map(stripCanonicalPrefix),
+        ...(item.objectKeys || []).map(stripCanonicalPrefix)
+      ]
+      const matchTexts = [
+        canonical?.label,
+        item.mentionText,
+        item.summary,
+        canonical?.trigger,
+        item.predicateText,
+        canonical?.predicateText,
+        ...roleTexts,
+        ...itemRoleTexts,
+        ...(canonical?.aliases || [])
+      ]
+
+      return {
+        ...item,
+        mergeReason: buildMergeReason(kind, canonical, item),
+        paragraphs: loadParagraphDetails(graphId, item.fileId, item.paragraphRefs, matchTexts)
+      }
+    })
+    .map(item => {
+      if (item.paragraphs.length > 0) return item
+      return {
+        ...item,
+        paragraphs: loadParagraphDetails(graphId, item.fileId, item.paragraphRefs, [
+          canonical?.label,
+          item.mentionText,
+          item.summary
+        ])
+      }
+    })
+    .filter(item => item.paragraphs.length > 0 || item.paragraphRefs?.length > 0)
 }
 
 function buildMergeSummary(kind, canonical, evidence = []) {
@@ -265,6 +417,7 @@ router.get('/', (req, res) => {
     let reconciled = false
     for (const graphId of graphIds) {
       reconciled = reconcileWorkspaceSourceState(graphId) || reconciled
+      reconcileWorkspaceCounts(graphId)
     }
     if (reconciled) saveToDisk()
 
@@ -277,11 +430,9 @@ router.get('/', (req, res) => {
       FROM graphs g
       ORDER BY g.updatedAt DESC
       `
-    ).map(graph => ({
-      ...graph,
-      intentProfile: parseJson(graph.intentProfile, {})
-    }))
+    ).map(graph => ensureWorkspaceExtractionPrompt(graph))
 
+    saveToDisk()
     res.json(graphs)
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -295,7 +446,8 @@ router.post('/', (req, res) => {
       id,
       name = '未命名工作区',
       intentQuery = '',
-      intentSummary = ''
+      intentSummary = '',
+      extractionPrompt = ''
     } = req.body || {}
 
     if (!id) return res.status(400).json({ error: 'id is required' })
@@ -304,16 +456,51 @@ router.post('/', (req, res) => {
     }
 
     const intentProfile = buildIntentProfile(intentQuery, intentSummary)
+    const nextExtractionPrompt = String(extractionPrompt || '').trim() || buildExtractionPrompt(intentQuery, intentSummary, intentProfile)
     run(
       `
-      INSERT INTO graphs (id, name, intentQuery, intentSummary, intentProfile, nodeCount, edgeCount, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+      INSERT INTO graphs (id, name, intentQuery, intentSummary, intentProfile, extractionPrompt, nodeCount, edgeCount, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
       `,
-      [id, String(name).trim(), String(intentQuery).trim(), String(intentSummary).trim(), JSON.stringify(intentProfile), now, now]
+      [
+        id,
+        String(name).trim(),
+        String(intentQuery).trim(),
+        String(intentSummary).trim(),
+        JSON.stringify(intentProfile),
+        nextExtractionPrompt,
+        now,
+        now
+      ]
     )
 
-    saveToDisk()
-    res.json({ success: true, id, intentProfile })
+    saveToDiskSync()
+    res.json({ success: true, id, intentProfile, extractionPrompt: nextExtractionPrompt })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+router.post('/prompt-preview', (req, res) => {
+  try {
+    const {
+      name = '',
+      intentQuery = '',
+      intentSummary = ''
+    } = req.body || {}
+
+    if (!String(intentQuery || '').trim()) {
+      return res.status(400).json({ error: 'intentQuery is required' })
+    }
+
+    const intentProfile = buildIntentProfile(intentQuery, intentSummary)
+    const extractionPrompt = buildExtractionPrompt(
+      [String(name || '').trim(), String(intentQuery || '').trim()].filter(Boolean).join(' '),
+      intentSummary,
+      intentProfile
+    )
+
+    res.json({ intentProfile, extractionPrompt })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -323,11 +510,16 @@ router.get('/:id', (req, res) => {
   try {
     let graph = getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id])
     if (!graph) return res.status(404).json({ error: 'Workspace not found' })
+    graph = ensureWorkspaceExtractionPrompt(graph)
 
     if (reconcileWorkspaceSourceState(req.params.id)) {
       saveToDisk()
-      graph = getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id])
+      graph = ensureWorkspaceExtractionPrompt(getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id]))
     }
+    reconcileWorkspaceCounts(req.params.id)
+    graph = ensureWorkspaceExtractionPrompt(getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id]))
+
+    saveToDisk()
 
     const nodes = allRows('SELECT * FROM nodes WHERE graphId = ?', [req.params.id]).map(node => ({
       ...node,
@@ -344,7 +536,6 @@ router.get('/:id', (req, res) => {
 
     res.json({
       ...graph,
-      intentProfile: parseJson(graph.intentProfile, {}),
       nodes,
       edges,
       importHistory
@@ -445,6 +636,7 @@ router.put('/:id', async (req, res) => {
       name,
       intentQuery = '',
       intentSummary = '',
+      extractionPrompt = '',
       nodes = [],
       edges = [],
       importHistory = []
@@ -456,6 +648,9 @@ router.put('/:id', async (req, res) => {
     const nextIntentQuery = intentQuery || existing?.intentQuery || ''
     const nextIntentSummary = intentSummary || existing?.intentSummary || ''
     const nextIntentProfile = buildIntentProfile(nextIntentQuery, nextIntentSummary)
+    const nextExtractionPrompt = String(extractionPrompt || '').trim()
+      || existing?.extractionPrompt
+      || buildExtractionPrompt(nextIntentQuery, nextIntentSummary, nextIntentProfile)
 
     if (existing) {
       run('DELETE FROM nodes WHERE graphId = ?', [id])
@@ -464,18 +659,39 @@ router.put('/:id', async (req, res) => {
       run(
         `
         UPDATE graphs
-        SET name = ?, intentQuery = ?, intentSummary = ?, intentProfile = ?, nodeCount = ?, edgeCount = ?, updatedAt = ?
+        SET name = ?, intentQuery = ?, intentSummary = ?, intentProfile = ?, extractionPrompt = ?, nodeCount = ?, edgeCount = ?, updatedAt = ?
         WHERE id = ?
         `,
-        [nextName, nextIntentQuery, nextIntentSummary, JSON.stringify(nextIntentProfile), nodes.length, edges.length, now, id]
+        [
+          nextName,
+          nextIntentQuery,
+          nextIntentSummary,
+          JSON.stringify(nextIntentProfile),
+          nextExtractionPrompt,
+          nodes.length,
+          edges.length,
+          now,
+          id
+        ]
       )
     } else {
       run(
         `
-        INSERT INTO graphs (id, name, intentQuery, intentSummary, intentProfile, nodeCount, edgeCount, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO graphs (id, name, intentQuery, intentSummary, intentProfile, extractionPrompt, nodeCount, edgeCount, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
-        [id, nextName, nextIntentQuery, nextIntentSummary, JSON.stringify(nextIntentProfile), nodes.length, edges.length, now, now]
+        [
+          id,
+          nextName,
+          nextIntentQuery,
+          nextIntentSummary,
+          JSON.stringify(nextIntentProfile),
+          nextExtractionPrompt,
+          nodes.length,
+          edges.length,
+          now,
+          now
+        ]
       )
     }
 
@@ -534,9 +750,9 @@ router.put('/:id', async (req, res) => {
       )
     }
 
-    saveToDisk()
+    saveToDiskSync()
     await rebuildGraphDb(id)
-    res.json({ success: true, intentProfile: nextIntentProfile })
+    res.json({ success: true, intentProfile: nextIntentProfile, extractionPrompt: nextExtractionPrompt })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -550,18 +766,20 @@ router.patch('/:id', async (req, res) => {
     const {
       name = existing.name,
       intentQuery = existing.intentQuery || '',
-      intentSummary = existing.intentSummary || ''
+      intentSummary = existing.intentSummary || '',
+      extractionPrompt = existing.extractionPrompt || ''
     } = req.body || {}
 
     const intentProfile = buildIntentProfile(intentQuery, intentSummary)
+    const nextExtractionPrompt = String(extractionPrompt || '').trim() || buildExtractionPrompt(intentQuery, intentSummary, intentProfile)
     run(
-      'UPDATE graphs SET name = ?, intentQuery = ?, intentSummary = ?, intentProfile = ?, updatedAt = ? WHERE id = ?',
-      [name, intentQuery, intentSummary, JSON.stringify(intentProfile), Date.now(), req.params.id]
+      'UPDATE graphs SET name = ?, intentQuery = ?, intentSummary = ?, intentProfile = ?, extractionPrompt = ?, updatedAt = ? WHERE id = ?',
+      [name, intentQuery, intentSummary, JSON.stringify(intentProfile), nextExtractionPrompt, Date.now(), req.params.id]
     )
 
-    saveToDisk()
+    saveToDiskSync()
     await rebuildGraphDb(req.params.id)
-    res.json({ success: true, intentProfile })
+    res.json({ success: true, intentProfile, extractionPrompt: nextExtractionPrompt })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -575,7 +793,7 @@ router.delete('/:id', async (req, res) => {
     run('DELETE FROM messages WHERE graphId = ?', [id])
     run('DELETE FROM sessions WHERE graphId = ?', [id])
     run('DELETE FROM graphs WHERE id = ?', [id])
-    saveToDisk()
+    saveToDiskSync()
     await deleteWorkspaceGraph(id)
     res.json({ success: true })
   } catch (error) {
@@ -605,7 +823,7 @@ router.delete('/:id/imports/:importId', async (req, res) => {
     run('DELETE FROM import_history WHERE id = ? AND graphId = ?', [importId, id])
     rebuildCanonicalGraph(id, allRows, run)
 
-    saveToDisk()
+    saveToDiskSync()
     await rebuildGraphDb(id)
     res.json({ success: true })
   } catch (error) {

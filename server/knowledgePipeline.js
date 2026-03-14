@@ -662,7 +662,7 @@ function pushMentionRef(mentionsByParagraph, paragraphRefs, kind, label) {
   }
 }
 
-function findParagraphRefs(paragraphs, label, fallback = [1]) {
+function findParagraphRefs(paragraphs, label, fallback = []) {
   const refs = []
   const target = String(label || '').trim()
   if (!target) return uniqueIntegers(fallback)
@@ -795,7 +795,7 @@ export function buildKnowledgeRecords(
     if (!label) continue
 
     const nodeType = normalizeNodeType(node.type)
-    const paragraphRefs = findParagraphRefs(paragraphs, label, [1])
+    const paragraphRefs = findParagraphRefs(paragraphs, label, [])
     const chunkId = findSegmentIdForParagraphRefs(segments, paragraphRefs)
     paragraphRefsByNode.set(label, paragraphRefs)
     if (nodeType === EVENT_NODE_TYPE) {

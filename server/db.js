@@ -46,6 +46,7 @@ async function initDB() {
   ensureColumn('graphs', "intentQuery TEXT DEFAULT ''")
   ensureColumn('graphs', "intentSummary TEXT DEFAULT ''")
   ensureColumn('graphs', "intentProfile TEXT DEFAULT '{}'")
+  ensureColumn('graphs', "extractionPrompt TEXT DEFAULT ''")
   db.run(`
     CREATE TABLE IF NOT EXISTS nodes (
       id TEXT NOT NULL,
@@ -115,6 +116,9 @@ async function initDB() {
       importedAt INTEGER NOT NULL
     )
   `)
+  ensureColumn('files', "contentHash TEXT DEFAULT ''")
+  ensureColumn('files', "importStatus TEXT DEFAULT 'completed'")
+  ensureColumn('files', "importMessage TEXT DEFAULT ''")
   db.run(`
     CREATE TABLE IF NOT EXISTS file_chunks (
       id TEXT PRIMARY KEY,
@@ -258,6 +262,7 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_messages_sessionId ON messages(sessionId)',
     'CREATE INDEX IF NOT EXISTS idx_sessions_graphId ON sessions(graphId)',
     'CREATE INDEX IF NOT EXISTS idx_files_graphId ON files(graphId)',
+    'CREATE INDEX IF NOT EXISTS idx_files_graph_hash ON files(graphId, contentHash)',
     'CREATE INDEX IF NOT EXISTS idx_file_chunks_graphId ON file_chunks(graphId)',
     'CREATE INDEX IF NOT EXISTS idx_file_chunks_fileId ON file_chunks(fileId)',
     'CREATE INDEX IF NOT EXISTS idx_file_chunks_kind ON file_chunks(graphId, chunkKind)',

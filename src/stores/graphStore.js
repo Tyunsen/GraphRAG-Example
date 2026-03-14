@@ -33,18 +33,36 @@ export const useGraphStore = defineStore('graph', () => {
   const savedGraphs = ref([])
   const currentGraphId = ref(loadCurrentGraphId())
   const backendReady = ref(false)
+  const graphViewMode = ref('event')
+
+  function isEventType(type) {
+    return /事件|event/i.test(String(type || '').trim())
+  }
+
+  function isVisibleByMode(node) {
+    if (!node) return false
+    if (graphViewMode.value === 'all') return true
+    if (graphViewMode.value === 'event') return isEventType(node.type)
+    if (graphViewMode.value === 'entity') return !isEventType(node.type)
+    return true
+  }
 
   const nodeList = computed(() => {
-    if (!focusedNodeIds.value) return Array.from(nodes.value.values())
-    return Array.from(focusedNodeIds.value)
+    const baseNodes = !focusedNodeIds.value
+      ? Array.from(nodes.value.values())
+      : Array.from(focusedNodeIds.value)
       .map(nodeId => nodes.value.get(nodeId))
       .filter(Boolean)
+    return baseNodes.filter(isVisibleByMode)
   })
   const edgeList = computed(() => {
-    if (!focusedEdgeIds.value) return Array.from(edges.value.values())
-    return Array.from(focusedEdgeIds.value)
+    const visibleNodeIds = new Set(nodeList.value.map(node => node.id))
+    const baseEdges = !focusedEdgeIds.value
+      ? Array.from(edges.value.values())
+      : Array.from(focusedEdgeIds.value)
       .map(edgeId => edges.value.get(edgeId))
       .filter(Boolean)
+    return baseEdges.filter(edge => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
   })
   const nodeCount = computed(() => nodes.value.size)
   const edgeCount = computed(() => edges.value.size)
@@ -264,6 +282,14 @@ export const useGraphStore = defineStore('graph', () => {
     graphVersion.value++
   }
 
+  function setGraphViewMode(mode) {
+    graphViewMode.value = ['event', 'entity', 'all'].includes(mode) ? mode : 'all'
+    if (selectedNode.value && !isVisibleByMode(selectedNode.value)) {
+      selectedNode.value = null
+    }
+    graphVersion.value++
+  }
+
   function focusSubgraph(subgraph) {
     if (!subgraph?.nodes?.length) {
       showFullGraph()
@@ -405,19 +431,22 @@ export const useGraphStore = defineStore('graph', () => {
     }
   }
 
-  async function createWorkspace({ name, intentQuery, intentSummary = '' }) {
+  async function createWorkspace({ name, intentQuery, intentSummary = '', extractionPrompt = '' }) {
     const id = generateId('g')
     const payload = {
       id,
       name: name?.trim() || '未命名工作区',
       intentQuery: intentQuery?.trim() || '',
-      intentSummary: intentSummary?.trim() || ''
+      intentSummary: intentSummary?.trim() || '',
+      extractionPrompt: extractionPrompt?.trim() || ''
     }
-    await createWorkspaceApi(payload)
+    const response = await createWorkspaceApi(payload)
     clearGraph()
     currentGraphId.value = id
     savedGraphs.value.unshift({
       ...payload,
+      intentProfile: response?.intentProfile || {},
+      extractionPrompt: response?.extractionPrompt || payload.extractionPrompt,
       nodeCount: 0,
       edgeCount: 0,
       fileCount: 0,
@@ -446,9 +475,12 @@ export const useGraphStore = defineStore('graph', () => {
   async function renameGraph(graphId, payload) {
     const entry = savedGraphs.value.find(item => item.id === graphId)
     if (!entry) return
-    Object.assign(entry, payload)
     try {
-      await renameGraphApi(graphId, payload)
+      const response = await renameGraphApi(graphId, payload)
+      Object.assign(entry, payload, {
+        intentProfile: response?.intentProfile || entry.intentProfile || {},
+        extractionPrompt: response?.extractionPrompt ?? payload.extractionPrompt ?? entry.extractionPrompt ?? ''
+      })
     } catch (error) {
       console.warn('[graphStore] rename/update failed:', error.message)
     }
@@ -507,6 +539,7 @@ export const useGraphStore = defineStore('graph', () => {
     currentGraphMeta,
     currentGraphName,
     currentIntentQuery,
+    graphViewMode,
     getNodeDegree,
     addNode,
     addEdge,
@@ -517,6 +550,7 @@ export const useGraphStore = defineStore('graph', () => {
     bfsSubgraph,
     setHighlightedNodes,
     setSelectedNode,
+    setGraphViewMode,
     focusSubgraph,
     focusEvidenceItem,
     showFullGraph,

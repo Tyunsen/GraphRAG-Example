@@ -1,7 +1,10 @@
 <template>
   <div class="files-panel">
     <div class="panel-header">
-      <div class="panel-title">文件</div>
+      <div>
+        <div class="panel-title">文件</div>
+        <div class="panel-subtitle">上传、查看和管理当前工作区文件</div>
+      </div>
       <button class="refresh-btn" @click="refreshFiles">刷新</button>
     </div>
 
@@ -10,130 +13,164 @@
       @files-selected="onFilesSelected"
     />
 
-    <div v-if="importStore.hasActivity" class="process-card">
-      <div class="process-head">
-        <div>
-          <div class="process-title">导入任务</div>
-          <div class="process-file">{{ importSummary }}</div>
+    <div class="file-shell">
+      <div class="file-list-panel">
+        <div class="file-list-head">
+          <div class="file-list-title">文件列表</div>
+          <div class="file-list-count">{{ unifiedFiles.length }} 项</div>
         </div>
-        <button class="process-clear" @click="importStore.clearProcess()">清除</button>
-      </div>
 
-      <div class="progress-copy">
-        <div class="progress-label">{{ progressLabel }}</div>
-        <div class="progress-value">{{ progressPercent }}%</div>
-      </div>
-
-      <div class="progress-track">
-        <div
-          class="progress-bar"
-          :class="{ error: Boolean(importStore.parseError) }"
-          :style="{ width: `${progressPercent}%` }"
-        ></div>
-      </div>
-
-      <div v-if="activeStageDetail" class="progress-detail">{{ activeStageDetail }}</div>
-
-      <div v-if="taskItems.length" class="task-list">
-        <div
-          v-for="item in taskItems"
-          :key="item.id"
-          class="task-item"
-          :class="`task-${item.status}`"
-        >
-          <div class="task-item-head">
-            <div class="task-item-name">{{ item.fileName }}</div>
-            <div class="task-item-state">{{ formatTaskState(item) }}</div>
-          </div>
-
-          <div class="task-item-track">
-            <div class="task-item-bar" :style="{ width: `${getTaskProgress(item)}%` }"></div>
-          </div>
-
-          <div class="task-item-stage-copy">
-            <div class="task-item-stage-title">{{ getCurrentTaskStageLabel(item) }}</div>
-            <div v-if="getCurrentTaskStageDetail(item)" class="task-item-stage-detail">
-              {{ getCurrentTaskStageDetail(item) }}
-            </div>
-          </div>
-
-          <div v-if="item.stages?.length" class="task-item-stages">
-            <div
-              v-for="stage in item.stages"
-              :key="`${item.id}-${stage.key}`"
-              class="task-stage-chip"
-              :class="`task-stage-${stage.status}`"
-            >
-              {{ formatStageLabel(stage.key) }}
-            </div>
-          </div>
-
-          <div v-if="item.summary" class="task-item-meta">
-            {{ formatMethod(item.summary.method) }} · {{ item.summary.nodeCount }} 节点 · {{ item.summary.edgeCount }} 关系
-          </div>
-          <div v-else-if="item.error" class="task-item-error">{{ item.error }}</div>
-
-          <div v-if="item.status === 'error'" class="task-item-actions">
-            <button class="task-retry-btn" type="button" @click="retryItem(item)">重试</button>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="hasFailedItems" class="task-actions">
-        <button class="task-retry-all-btn" type="button" @click="retryFailedItems()">重试失败项</button>
-      </div>
-
-      <div v-if="importStore.extractionSummary" class="summary-card">
-        <div class="summary-line">
-          <span>当前文件</span>
-          <strong>{{ importStore.currentFileName || '未开始' }}</strong>
-        </div>
-        <div class="summary-line">
-          <span>抽取方式</span>
-          <strong>{{ formatMethod(importStore.extractionSummary.method) }}</strong>
-        </div>
-        <div class="summary-line">
-          <span>抽取结果</span>
-          <strong>{{ importStore.extractionSummary.nodeCount }} 节点 · {{ importStore.extractionSummary.edgeCount }} 关系</strong>
-        </div>
-        <div v-if="importStore.extractionSummary.entityLabels.length" class="summary-tags">
-          <span v-for="label in importStore.extractionSummary.entityLabels" :key="label" class="summary-tag">{{ label }}</span>
-        </div>
-        <div v-if="importStore.extractionSummary.eventLabels.length" class="summary-tags">
-          <span
-            v-for="label in importStore.extractionSummary.eventLabels"
-            :key="label"
-            class="summary-tag summary-tag-event"
+        <div v-if="filesLoading && unifiedFiles.length === 0" class="file-list-empty">正在加载文件...</div>
+        <div v-else-if="unifiedFiles.length === 0" class="file-list-empty">当前工作区还没有文件</div>
+        <div v-else class="file-list">
+          <button
+            v-for="item in unifiedFiles"
+            :key="item.rowKey"
+            class="file-row"
+            :class="[`state-${item.state}`, { active: selectedRowKey === item.rowKey }]"
+            @click="selectFileRow(item)"
           >
-            {{ label }}
-          </span>
+            <div class="file-row-main">
+              <div class="file-row-titleline">
+                <span class="file-row-name">{{ item.fileName }}</span>
+                <span class="file-row-badge" :class="`badge-${item.state}`">{{ item.stateLabel }}</span>
+              </div>
+
+              <div class="file-row-meta">
+                <span v-if="item.fileSizeText">{{ item.fileSizeText }}</span>
+                <span v-if="item.timeText">{{ item.timeText }}</span>
+                <span v-if="item.stageLabel">{{ item.stageLabel }}</span>
+              </div>
+
+              <div v-if="item.progress > 0 && item.state !== 'completed'" class="file-row-progress">
+                <div class="file-row-progress-track">
+                  <div class="file-row-progress-bar" :style="{ width: `${item.progress}%` }"></div>
+                </div>
+                <span class="file-row-progress-value">{{ item.progress }}%</span>
+              </div>
+
+              <div v-if="item.stageDetail" class="file-row-detail">{{ item.stageDetail }}</div>
+              <div v-if="item.error" class="file-row-error">{{ item.error }}</div>
+            </div>
+
+            <div class="file-row-actions" @click.stop>
+              <button
+                v-if="item.canRetry"
+                class="file-row-action"
+                type="button"
+                @click="retryItem(item)"
+              >
+                重试
+              </button>
+              <button
+                v-if="item.fileId"
+                class="file-row-action file-row-action-danger"
+                type="button"
+                @click="removeFile(item)"
+              >
+                移除
+              </button>
+            </div>
+          </button>
         </div>
       </div>
 
-      <details v-if="importStore.processLogs.length" class="process-details">
-        <summary>查看当前文件日志</summary>
-        <div class="log-list">
-          <div v-for="line in importStore.processLogs" :key="line" class="log-line">{{ line }}</div>
-        </div>
-      </details>
-    </div>
+      <div class="file-detail-panel">
+        <template v-if="selectedItem">
+          <div class="file-detail-head">
+            <div>
+              <div class="file-detail-title">{{ selectedItem.fileName }}</div>
+              <div class="file-detail-meta">
+                <span v-if="selectedItem.fileSizeText">{{ selectedItem.fileSizeText }}</span>
+                <span v-if="selectedItem.timeText">{{ selectedItem.timeText }}</span>
+                <span>{{ selectedItem.stateLabel }}</span>
+              </div>
+            </div>
 
-    <div v-if="importStore.parseError" class="status-card status-error">{{ importStore.parseError }}</div>
-
-    <div class="file-list-card">
-      <div class="file-list-title">已上传文件</div>
-      <div v-if="filesLoading" class="file-list-empty">正在加载文件...</div>
-      <div v-else-if="workspaceFiles.length === 0" class="file-list-empty">这个工作区还没有文件。</div>
-      <div v-else class="file-list">
-        <div v-for="file in workspaceFiles" :key="file.id" class="file-row">
-          <div class="file-row-main">
-            <div class="file-row-name">{{ file.fileName }}</div>
-            <div class="file-row-meta">
-              {{ formatFileSize(file.fileSize) }} · {{ formatTime(file.importedAt) }}
+            <div v-if="selectedItem.fileId" class="file-detail-tabs">
+              <button
+                class="file-detail-tab"
+                :class="{ active: detailTab === 'content' }"
+                @click="detailTab = 'content'"
+              >
+                原文
+              </button>
+              <button
+                class="file-detail-tab"
+                :class="{ active: detailTab === 'graph' }"
+                @click="openFileGraph"
+              >
+                文件图谱
+              </button>
             </div>
           </div>
-          <button class="file-row-delete" @click="removeFile(file)">移除</button>
-        </div>
+
+          <div v-if="selectedItem.fileId && detailLoading" class="file-detail-empty">正在加载文件内容...</div>
+          <div v-else-if="selectedItem.fileId && detailError" class="file-detail-empty file-detail-error">{{ detailError }}</div>
+          <div v-else-if="selectedItem.fileId && selectedDetail && detailTab === 'content'" class="file-content">
+            <div
+              v-for="chunk in selectedDetail.chunks || []"
+              :key="chunk.id"
+              class="file-paragraph"
+            >
+              <div class="file-paragraph-index">第 {{ chunk.paragraphIndex }} 段</div>
+              <div class="file-paragraph-content">{{ chunk.content }}</div>
+              <div v-if="chunk.linkedNodes?.length || chunk.linkedEvents?.length" class="file-paragraph-tags">
+                <span v-for="label in chunk.linkedNodes || []" :key="`n-${chunk.id}-${label}`" class="tag-chip">
+                  {{ label }}
+                </span>
+                <span v-for="label in chunk.linkedEvents || []" :key="`e-${chunk.id}-${label}`" class="tag-chip tag-chip-event">
+                  {{ label }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="selectedItem.fileId && selectedDetail && detailTab === 'graph'" class="file-graph-panel">
+            <div class="file-graph-summary">
+              <div class="file-graph-line">
+                <span>关联实体</span>
+                <strong>{{ fileLinkedNodes.length }}</strong>
+              </div>
+              <div class="file-graph-line">
+                <span>关联事件</span>
+                <strong>{{ fileLinkedEvents.length }}</strong>
+              </div>
+            </div>
+
+            <div class="file-graph-actions">
+              <button class="focus-btn" @click="focusSelectedFileGraph">在右侧查看文件图谱</button>
+              <button class="focus-btn focus-btn-secondary" @click="graphStore.showFullGraph()">恢复全图</button>
+            </div>
+
+            <div v-if="fileLinkedEvents.length" class="file-tag-block">
+              <div class="file-tag-title">事件</div>
+              <div class="file-tag-list">
+                <span v-for="label in fileLinkedEvents" :key="`event-${label}`" class="tag-chip tag-chip-event">
+                  {{ label }}
+                </span>
+              </div>
+            </div>
+
+            <div v-if="fileLinkedNodes.length" class="file-tag-block">
+              <div class="file-tag-title">实体</div>
+              <div class="file-tag-list">
+                <span v-for="label in fileLinkedNodes" :key="`node-${label}`" class="tag-chip">
+                  {{ label }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="file-detail-empty">
+            <div>{{ selectedItem.stateLabel }}</div>
+            <div v-if="selectedItem.stageDetail">{{ selectedItem.stageDetail }}</div>
+            <div v-else-if="selectedItem.error">{{ selectedItem.error }}</div>
+            <div v-else>这份文件还没有可查看的内容</div>
+          </div>
+        </template>
+
+        <div v-else class="file-detail-empty">选择一份文件后，在这里查看原文或文件图谱</div>
       </div>
     </div>
   </div>
@@ -141,15 +178,21 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { deleteFileApi, fetchFiles } from '@/services/apiClient'
+import { deleteFileApi, fetchFileDetail, fetchFiles } from '@/services/apiClient'
 import { useGraphStore } from '@/stores/graphStore'
 import { useImportStore } from '@/stores/importStore'
 import FileImporter from '@/components/import/FileImporter.vue'
 
 const graphStore = useGraphStore()
 const importStore = useImportStore()
+
 const workspaceFiles = ref([])
 const filesLoading = ref(false)
+const selectedRowKey = ref('')
+const selectedDetail = ref(null)
+const detailLoading = ref(false)
+const detailError = ref('')
+const detailTab = ref('content')
 
 const STAGE_LABELS = {
   receive: '接收',
@@ -159,82 +202,66 @@ const STAGE_LABELS = {
   complete: '完成'
 }
 
-const taskItems = computed(() => importStore.jobItems || [])
-const hasFailedItems = computed(() => taskItems.value.some(item => item.status === 'error'))
-
-const progressPercent = computed(() => {
-  if (importStore.totalCount) return importStore.overallProgress
-
-  const stages = importStore.stages
-  if (!stages.length) return 0
-
-  const total = stages.length
-  let progress = 0
-  stages.forEach((stage, index) => {
-    if (stage.status === 'done') progress += 1
-    else if (stage.status === 'running') progress += 0.55
-    else if (stage.status === 'ready') progress += 0.82
-    else if (stage.status === 'error') progress = Math.max(progress, index + 0.35)
-  })
-  return Math.min(100, Math.max(0, Math.round((progress / total) * 100)))
+const unifiedFiles = computed(() => {
+  const rows = workspaceFiles.value.map(buildCompletedRow)
+  const persistedFileIds = new Set(workspaceFiles.value.map(file => String(file.id || '')).filter(Boolean))
+  for (const task of importStore.jobItems || []) {
+    if (task.status === 'done') continue
+    if (task.status === 'skipped' && persistedFileIds.has(String(task.id || ''))) continue
+    rows.push(buildTaskRow(task))
+  }
+  rows.sort((left, right) => (right.timestamp || 0) - (left.timestamp || 0))
+  return rows
 })
 
-const progressLabel = computed(() => {
-  if (importStore.parseError) return '处理失败'
-  if (!importStore.totalCount) {
-    const running = importStore.currentStage
-    return running ? `正在${running.label}` : '等待处理'
-  }
+const selectedItem = computed(() =>
+  unifiedFiles.value.find(item => item.rowKey === selectedRowKey.value) || null
+)
 
-  const finished = importStore.completedCount + importStore.failedCount
-  if (finished === importStore.totalCount) {
-    if (importStore.failedCount > 0) {
-      return `已完成 ${importStore.completedCount}/${importStore.totalCount}，失败 ${importStore.failedCount}`
-    }
-    return `已完成 ${importStore.totalCount} 个文件`
+const fileLinkedNodes = computed(() => {
+  const labels = new Set()
+  for (const chunk of selectedDetail.value?.chunks || []) {
+    for (const label of chunk.linkedNodes || []) labels.add(label)
   }
-
-  const runningItem = taskItems.value.find(item => item.status === 'running')
-  if (runningItem) {
-    return `正在处理 ${runningItem.fileName} · 已完成 ${importStore.completedCount}/${importStore.totalCount}`
-  }
-
-  return `已完成 ${importStore.completedCount}/${importStore.totalCount}`
+  return [...labels]
 })
 
-const activeStageDetail = computed(() => {
-  const running = importStore.currentStage
-  if (running?.detail) return running.detail
-  const lastDone = [...importStore.stages].reverse().find(item => item.status === 'done' && item.detail)
-  return lastDone?.detail || ''
-})
-
-const importSummary = computed(() => {
-  if (importStore.totalCount) {
-    return `本轮共 ${importStore.totalCount} 个文件`
+const fileLinkedEvents = computed(() => {
+  const labels = new Set()
+  for (const chunk of selectedDetail.value?.chunks || []) {
+    for (const label of chunk.linkedEvents || []) labels.add(label)
   }
-  return importStore.currentFileName || '等待文件'
+  return [...labels]
 })
 
 watch(
   () => graphStore.currentGraphId,
-  () => {
-    void refreshFiles()
+  async () => {
+    selectedRowKey.value = ''
+    selectedDetail.value = null
+    detailError.value = ''
+    detailTab.value = 'content'
+    await refreshFiles()
   },
   { immediate: true }
 )
 
 watch(
-  () => [graphStore.currentGraphId, importStore.completedCount, importStore.failedCount],
-  async ([graphId]) => {
-    if (!graphId) return
+  () => [graphStore.currentGraphId, importStore.completedCount, importStore.failedCount, workspaceFiles.value.length],
+  async () => {
+    if (!graphStore.currentGraphId) return
     await refreshFiles()
-    graphStore.syncCurrentGraphMeta({
-      fileCount: workspaceFiles.value.length,
-      nodeCount: graphStore.nodeCount,
-      edgeCount: graphStore.edgeCount,
-      updatedAt: Date.now()
-    })
+    if (!selectedRowKey.value && unifiedFiles.value.length > 0) {
+      selectedRowKey.value = unifiedFiles.value[0].rowKey
+    }
+  }
+)
+
+watch(
+  () => selectedRowKey.value,
+  async () => {
+    detailTab.value = 'content'
+    await loadSelectedDetail()
   }
 )
 
@@ -243,25 +270,8 @@ async function onFilesSelected(files) {
   if (selectedFiles.length === 0) return
 
   await importStore.importFiles(selectedFiles)
-  if (!graphStore.currentGraphId) return
   await refreshFiles()
-  graphStore.syncCurrentGraphMeta({
-    fileCount: workspaceFiles.value.length,
-    nodeCount: graphStore.nodeCount,
-    edgeCount: graphStore.edgeCount,
-    updatedAt: Date.now()
-  })
   await graphStore.refreshGraphList()
-}
-
-async function retryFailedItems(fileIds = []) {
-  await importStore.retryFailedItems(fileIds)
-  await refreshFiles()
-}
-
-async function retryItem(item) {
-  if (!item?.id) return
-  await retryFailedItems([item.id])
 }
 
 async function refreshFiles() {
@@ -269,6 +279,7 @@ async function refreshFiles() {
     workspaceFiles.value = []
     return
   }
+
   filesLoading.value = true
   try {
     workspaceFiles.value = await fetchFiles(graphStore.currentGraphId)
@@ -280,18 +291,155 @@ async function refreshFiles() {
   }
 }
 
-async function removeFile(file) {
-  if (!graphStore.currentGraphId) return
-  await deleteFileApi(graphStore.currentGraphId, file.id)
+async function selectFileRow(item) {
+  selectedRowKey.value = item.rowKey
+}
+
+async function loadSelectedDetail() {
+  const item = selectedItem.value
+  selectedDetail.value = null
+  detailError.value = ''
+
+  if (!item?.fileId) return
+
+  detailLoading.value = true
+  try {
+    selectedDetail.value = await fetchFileDetail(item.fileId)
+  } catch (error) {
+    detailError.value = error.message || '加载文件详情失败'
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function openFileGraph() {
+  detailTab.value = 'graph'
+  focusSelectedFileGraph()
+}
+
+function focusSelectedFileGraph() {
+  if (!selectedDetail.value) return
+  graphStore.focusEvidenceItem({
+    linkedNodes: fileLinkedNodes.value,
+    linkedEvents: fileLinkedEvents.value
+  }, { maxDepth: 1, maxNodes: 36 })
+}
+
+async function removeFile(item) {
+  if (!graphStore.currentGraphId || !item.fileId) return
+  await deleteFileApi(graphStore.currentGraphId, item.fileId)
+  if (selectedRowKey.value === item.rowKey) {
+    selectedRowKey.value = ''
+    selectedDetail.value = null
+  }
   await graphStore.loadGraph(graphStore.currentGraphId)
   await refreshFiles()
-  graphStore.syncCurrentGraphMeta({
-    fileCount: workspaceFiles.value.length,
-    nodeCount: graphStore.nodeCount,
-    edgeCount: graphStore.edgeCount,
-    updatedAt: Date.now()
-  })
   await graphStore.refreshGraphList()
+}
+
+async function retryItem(item) {
+  if (!item?.taskId) return
+  await importStore.retryFailedItems([item.taskId])
+  await refreshFiles()
+}
+
+function buildCompletedRow(file) {
+  const storedState = formatStoredFileState(file)
+  return {
+    rowKey: `file:${file.id}`,
+    fileId: file.id,
+    taskId: '',
+    fileName: file.fileName,
+    fileSizeText: formatFileSize(file.fileSize),
+    timeText: formatTime(file.importedAt),
+    timestamp: Number(file.importedAt || 0),
+    progress: 100,
+    state: storedState.state,
+    stateLabel: storedState.label,
+    stageLabel: '',
+    stageDetail: file.importMessage || '',
+    error: '',
+    canRetry: false
+  }
+}
+
+function buildTaskRow(task) {
+  const stage = getCurrentTaskStage(task)
+  const state = task.status === 'error'
+    ? 'error'
+    : task.status === 'skipped'
+      ? 'skipped'
+      : task.status === 'done'
+        ? 'completed'
+        : 'running'
+
+  return {
+    rowKey: `task:${task.id}`,
+    fileId: '',
+    taskId: task.id,
+    fileName: task.fileName,
+    fileSizeText: formatFileSize(task.fileSize),
+    timeText: '',
+    timestamp: Number(task.updatedAt || task.createdAt || Date.now()),
+    progress: task.status === 'skipped' ? 100 : getTaskProgress(task),
+    state,
+    stateLabel: formatTaskState(task),
+    stageLabel: stage ? formatStageLabel(stage.key) : '',
+    stageDetail: stage?.detail || '',
+    error: task.error || '',
+    canRetry: task.status === 'error'
+  }
+}
+
+function getTaskProgress(item) {
+  const stages = item?.stages || []
+  if (!stages.length) return 0
+  let progress = 0
+  stages.forEach((stage, index) => {
+    if (stage.status === 'done') progress += 1
+    else if (stage.status === 'running') progress += 0.55
+    else if (stage.status === 'error') progress = Math.max(progress, index + 0.35)
+  })
+  return Math.min(100, Math.round((progress / stages.length) * 100))
+}
+
+function getCurrentTaskStage(item) {
+  return (
+    item?.stages?.find(stage => stage.status === 'running') ||
+    [...(item?.stages || [])].reverse().find(stage => stage.status === 'done') ||
+    null
+  )
+}
+
+function formatTaskState(item) {
+  if (item.status === 'done') return '已完成'
+  if (item.status === 'skipped') {
+    if (item?.summary?.method === 'duplicate-skip') return '重复跳过'
+    if (item?.result?.skipReason === 'no-match' || item?.summary?.nodeCount === 0) return '未命中'
+    return '已跳过'
+  }
+  if (item.status === 'error') return '失败'
+  if (item.status === 'queued') return '排队中'
+  return '处理中'
+}
+
+function formatStoredFileState(file) {
+  const status = String(file.importStatus || 'completed').trim()
+  if (status === 'no-match') {
+    return {
+      state: 'skipped',
+      label: '未命中'
+    }
+  }
+
+  return {
+    state: 'completed',
+    label: '已完成'
+  }
+}
+
+function formatStageLabel(stageKey) {
+  return STAGE_LABELS[stageKey] || stageKey
 }
 
 function formatTime(ts) {
@@ -309,56 +457,6 @@ function formatFileSize(size) {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
-
-function getTaskProgress(item) {
-  const stages = item?.stages || []
-  if (!stages.length) return 0
-
-  let progress = 0
-  stages.forEach((stage, index) => {
-    if (stage.status === 'done') progress += 1
-    else if (stage.status === 'running') progress += 0.55
-    else if (stage.status === 'error') progress = Math.max(progress, index + 0.35)
-  })
-  return Math.min(100, Math.round((progress / stages.length) * 100))
-}
-
-function formatTaskState(item) {
-  if (item.status === 'done') return '完成'
-  if (item.status === 'error') return '失败'
-  if (item.status === 'queued') return '排队中'
-  return `${getTaskProgress(item)}%`
-}
-
-function formatStageLabel(stageKey) {
-  return STAGE_LABELS[stageKey] || stageKey
-}
-
-function getCurrentTaskStage(item) {
-  return (
-    item?.stages?.find(stage => stage.status === 'running') ||
-    [...(item?.stages || [])].reverse().find(stage => stage.status === 'done') ||
-    null
-  )
-}
-
-function getCurrentTaskStageLabel(item) {
-  const stage = getCurrentTaskStage(item)
-  if (!stage) return '等待处理'
-  return `${formatStageLabel(stage.key)} · ${formatTaskState(item)}`
-}
-
-function getCurrentTaskStageDetail(item) {
-  return getCurrentTaskStage(item)?.detail || ''
-}
-
-function formatMethod(method) {
-  if (method === 'server-llm') return '模型抽取'
-  if (method === 'structured-precomputed') return '结构化导入'
-  if (method === 'fallback-rule') return '规则回退'
-  if (method === 'empty-content') return '空内容'
-  return method || '未知'
-}
 </script>
 
 <style scoped>
@@ -373,14 +471,20 @@ function formatMethod(method) {
 
 .panel-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
 }
 
 .panel-title {
   font-size: 16px;
   font-weight: 700;
+}
+
+.panel-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 
 .refresh-btn {
@@ -392,363 +496,357 @@ function formatMethod(method) {
   font-weight: 600;
 }
 
-.process-card,
-.file-list-card,
-.summary-card {
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.78);
+.file-shell {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.35fr);
+  overflow: hidden;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
-.process-card {
-  overflow: hidden;
+.file-list-panel,
+.file-detail-panel {
+  min-height: 0;
+  background: transparent;
 }
 
-.file-list-card {
-  flex: 1;
-  min-height: 0;
+.file-list-panel {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid rgba(148, 163, 184, 0.14);
 }
 
-.process-head {
+.file-list-head,
+.file-detail-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
 }
 
-.process-title,
-.file-list-title {
-  font-size: 13px;
+.file-list-title,
+.file-detail-title {
+  font-size: 14px;
   font-weight: 700;
 }
 
-.process-file {
+.file-list-count,
+.file-detail-meta {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.file-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-top: 4px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
 }
 
-.process-clear {
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: rgba(241, 245, 249, 0.96);
-  color: var(--color-text-secondary);
-  font-size: 11px;
-}
-
-.progress-copy {
+.file-list-empty,
+.file-detail-empty {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 14px;
+  justify-content: center;
+  min-height: 160px;
+  padding: 18px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  text-align: center;
 }
 
-.progress-label {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.progress-value {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.progress-track {
-  margin-top: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: rgba(226, 232, 240, 0.9);
-  overflow: hidden;
-}
-
-.progress-bar {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #4f6df5, #2f9ef5);
-  transition: width 0.24s ease;
-}
-
-.progress-bar.error {
-  background: linear-gradient(90deg, #ef4444, #f97316);
-}
-
-.progress-detail {
-  margin-top: 12px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  line-height: 1.7;
-}
-
-.task-list {
-  display: grid;
-  gap: 10px;
-  margin-top: 14px;
-  max-height: 280px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.task-item {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(248, 250, 252, 0.95);
-  border: 1px solid var(--color-border-light);
-}
-
-.task-item-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.task-item-name {
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-item-state,
-.task-item-meta,
-.task-item-error {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-.task-item-error {
+.file-detail-error {
   color: var(--color-danger);
 }
 
-.task-item-track {
-  margin-top: 8px;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(226, 232, 240, 0.9);
-  overflow: hidden;
-}
-
-.task-item-bar {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #4f6df5, #2f9ef5);
-}
-
-.task-done .task-item-bar {
-  background: linear-gradient(90deg, #16a34a, #22c55e);
-}
-
-.task-error .task-item-bar {
-  background: linear-gradient(90deg, #ef4444, #f97316);
-}
-
-.task-item-stage-copy {
-  margin-top: 8px;
-}
-
-.task-item-stage-title {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.task-item-stage-detail {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-}
-
-.task-item-stages {
+.file-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.task-stage-chip {
-  padding: 3px 8px;
+.file-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  text-align: left;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.84);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.file-row:hover {
+  border-color: rgba(79, 109, 245, 0.24);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.file-row.active {
+  border-color: rgba(79, 109, 245, 0.36);
+  background: rgba(79, 109, 245, 0.08);
+}
+
+.file-row.state-error {
+  border-color: rgba(220, 38, 38, 0.22);
+}
+
+.file-row.state-skipped {
+  border-color: rgba(245, 158, 11, 0.22);
+}
+
+.file-row-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 6px;
+}
+
+.file-row-titleline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-row-name {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-row-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
   border-radius: 999px;
   font-size: 10px;
-  background: rgba(148, 163, 184, 0.18);
-  color: var(--color-text-secondary);
+  font-weight: 700;
 }
 
-.task-stage-running {
-  background: rgba(79, 109, 245, 0.14);
-  color: var(--color-primary);
-}
-
-.task-stage-done,
-.task-stage-ready {
-  background: rgba(34, 197, 94, 0.14);
+.badge-completed {
+  background: rgba(34, 197, 94, 0.12);
   color: #15803d;
 }
 
-.task-stage-error {
-  background: rgba(239, 68, 68, 0.14);
+.badge-running {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
+.badge-error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.badge-skipped {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.file-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.file-row-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-row-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  overflow: hidden;
+}
+
+.file-row-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #60a5fa);
+}
+
+.file-row-progress-value,
+.file-row-detail {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.file-row-error {
+  font-size: 11px;
   color: var(--color-danger);
 }
 
-.task-item-meta,
-.task-item-error {
-  margin-top: 8px;
-}
-
-.task-item-actions,
-.task-actions {
-  margin-top: 10px;
-}
-
-.task-item-actions {
+.file-row-actions {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.task-retry-btn,
-.task-retry-all-btn {
-  padding: 7px 10px;
+.file-row-action {
+  padding: 6px 10px;
   border-radius: 10px;
+  background: rgba(241, 245, 249, 0.92);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.file-row-action-danger {
+  color: var(--color-danger);
+}
+
+.file-detail-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.file-detail-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.file-detail-tab {
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.9);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.file-detail-tab.active {
   background: rgba(79, 109, 245, 0.1);
   color: var(--color-primary);
-  font-size: 11px;
-  font-weight: 600;
 }
 
-.task-retry-all-btn {
-  width: 100%;
-}
-
-.summary-card {
-  margin-top: 14px;
-}
-
-.summary-line {
+.file-content,
+.file-graph-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 12px;
-  font-size: 12px;
-  margin-bottom: 8px;
 }
 
-.summary-tags {
+.file-paragraph {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  display: grid;
+  gap: 8px;
+}
+
+.file-paragraph-index {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+
+.file-paragraph-content {
+  font-size: 13px;
+  line-height: 1.72;
+  white-space: pre-wrap;
+}
+
+.file-paragraph-tags,
+.file-tag-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 8px;
 }
 
-.summary-tag {
-  padding: 4px 8px;
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
   border-radius: 999px;
   background: rgba(79, 109, 245, 0.08);
   color: var(--color-primary);
   font-size: 11px;
 }
 
-.summary-tag-event {
-  background: rgba(245, 158, 11, 0.12);
+.tag-chip-event {
+  background: rgba(245, 158, 11, 0.14);
   color: #b45309;
 }
 
-.process-details {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--color-border-light);
-}
-
-.process-details summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.log-list {
-  margin-top: 10px;
+.file-graph-summary {
   display: grid;
-  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
-.log-line {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-}
-
-.status-card {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(241, 245, 249, 0.88);
-  border: 1px solid var(--color-border);
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.status-error {
-  color: var(--color-danger);
-  background: rgba(254, 242, 242, 0.9);
-  border-color: rgba(252, 165, 165, 0.7);
-}
-
-.file-list-empty {
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.file-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.file-row {
+.file-graph-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.file-graph-actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
-  padding: 10px 0;
-  border-top: 1px solid var(--color-border-light);
 }
 
-.file-row:first-child {
-  border-top: none;
-  padding-top: 0;
-}
-
-.file-row-main {
-  min-width: 0;
-}
-
-.file-row-name {
-  font-size: 13px;
+.focus-btn {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(79, 109, 245, 0.1);
+  color: var(--color-primary);
+  font-size: 12px;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.file-row-meta {
-  margin-top: 4px;
-  font-size: 11px;
+.focus-btn-secondary {
+  background: rgba(241, 245, 249, 0.92);
   color: var(--color-text-secondary);
 }
 
-.file-row-delete {
-  flex-shrink: 0;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: rgba(254, 242, 242, 0.92);
-  color: var(--color-danger);
-  font-size: 11px;
+.file-tag-block {
+  display: grid;
+  gap: 10px;
+}
+
+.file-tag-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+
+@media (max-width: 1100px) {
+  .file-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .file-list-panel {
+    border-right: 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  }
 }
 </style>

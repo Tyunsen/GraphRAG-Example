@@ -73,7 +73,7 @@
             </div>
 
             <div v-if="nodeExplain.evidence?.length" class="graph-node-card-group">
-              <div class="graph-node-card-label">来源</div>
+              <div class="graph-node-card-label">证据</div>
               <div class="graph-node-evidence-list">
                 <div
                   v-for="(item, index) in nodeExplain.evidence.slice(0, 4)"
@@ -176,11 +176,49 @@ function formatRoleKeys(keys = []) {
     .join('、')
 }
 
+function parseEventLabel(label = '') {
+  const text = String(label || '').trim()
+  if (!text) return { subject: '', predicate: '', object: '' }
+
+  const predicates = [
+    '持续打击', '发动打击', '联合打击', '直接打击', '空袭', '袭击', '打击',
+    '施压', '封锁', '威胁封锁', '拦截', '发射', '报复', '回应', '谈判', '停火',
+    '声明', '会谈', '伤亡', '遇袭', '受损'
+  ].sort((a, b) => b.length - a.length)
+
+  for (const predicate of predicates) {
+    const index = text.indexOf(predicate)
+    if (index <= 0) continue
+    return {
+      subject: text.slice(0, index).trim(),
+      predicate,
+      object: text.slice(index + predicate.length).trim()
+    }
+  }
+
+  if (text.endsWith('伤亡') && text.length > 2) {
+    return { subject: text.slice(0, -2).trim(), predicate: '伤亡', object: '' }
+  }
+
+  return { subject: '', predicate: text, object: '' }
+}
+
 function formatEventSvo(canonical) {
   if (!canonical) return ''
-  const subject = formatRoleKeys(canonical.subjectKeys || []) || '未知主体'
-  const predicate = canonical.predicateText || canonical.trigger || canonical.label || '相关'
-  const object = formatRoleKeys(canonical.objectKeys || []) || '未知客体'
+  const parsed = parseEventLabel(canonical.label || canonical.summary || '')
+  const parsedIsUsable = Boolean(parsed.subject && parsed.predicate)
+  const predicate = (() => {
+    const raw = String(canonical.predicateText || '').trim()
+    if (parsedIsUsable) return parsed.predicate
+    if (raw && raw !== canonical.label) return raw
+    return parsed.predicate || String(canonical.trigger || canonical.label || '相关').trim()
+  })()
+  const subject = parsedIsUsable
+    ? parsed.subject
+    : (formatRoleKeys(canonical.subjectKeys || []) || parsed.subject || '未知主体')
+  const object = parsedIsUsable
+    ? (parsed.object || '未知客体')
+    : (formatRoleKeys(canonical.objectKeys || []) || parsed.object || '未知客体')
   return `${subject} -> ${predicate} -> ${object}`
 }
 
@@ -334,7 +372,8 @@ function closeNodeExplain() {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(148, 163, 184, 0.18);
-  overflow: hidden;
+  overflow: auto;
+  max-height: min(46vh, 520px);
 }
 
 .graph-node-card-head {

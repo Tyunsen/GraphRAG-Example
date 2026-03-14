@@ -35,38 +35,75 @@
     <transition name="workspace-panel">
       <div v-if="creating || editingId" class="workspace-overlay" @click="closePanel">
         <div class="workspace-card" @click.stop>
-          <div class="workspace-kicker">{{ editingId ? '编辑工作区' : '新建工作区' }}</div>
-          <div class="workspace-title">{{ editingId ? '更新工作区意图与抽取范围' : '先定义工作区意图，再持续导入文档' }}</div>
-          <div class="workspace-copy">
-            工作区意图会直接参与抽取提示和筛选逻辑。模型只围绕这里定义的主题、范围和关注对象构图。
+          <div class="workspace-card-head">
+            <div>
+              <div class="workspace-title">{{ editingId ? '编辑工作区' : '新建工作区' }}</div>
+              <div class="workspace-subtitle">
+                工作区决定抽取范围、文件筛选逻辑和后续会话的上下文边界。
+              </div>
+            </div>
+            <button class="workspace-close" type="button" @click="closePanel">关闭</button>
           </div>
 
-          <div class="workspace-fields">
-            <input
-              v-model="form.name"
-              class="input workspace-input"
-              placeholder="工作区名称，例如：伊朗局势"
-            />
-            <textarea
-              v-model="form.intentQuery"
-              class="input workspace-intent"
-              placeholder="工作区总意图，例如：只看中国相关的表态、行动与影响"
-            />
-            <textarea
-              v-model="form.intentSummary"
-              class="input workspace-summary"
-              placeholder="抽取补充说明，例如：重点关注中国官方表态、外交动作、经济影响，弱相关内容直接忽略"
-            />
+          <div class="workspace-grid">
+            <section class="workspace-section">
+              <div class="field-head">
+                <div class="field-title-row">
+                  <label class="field-label" for="workspace-name">工作区名称</label>
+                  <span class="field-hint">显示在左侧列表</span>
+                </div>
+              </div>
+              <input
+                id="workspace-name"
+                v-model="form.name"
+                class="input workspace-name"
+                placeholder="例如：伊朗局势"
+              />
+            </section>
+
+            <section class="workspace-section">
+              <div class="field-head">
+                <div class="field-title-row">
+                  <label class="field-label" for="workspace-intent">工作区意图</label>
+                  <span class="field-hint">决定抽取范围和问答边界</span>
+                </div>
+              </div>
+              <textarea
+                id="workspace-intent"
+                v-model="form.intentQuery"
+                class="input workspace-intent"
+                placeholder="例如：只看中国相关的表态、行动与影响"
+              />
+            </section>
+
+            <section class="workspace-section workspace-section-full">
+              <div class="field-head field-head-inline">
+                <div>
+                  <label class="field-label" for="workspace-prompt">抽取提示词</label>
+                  <div class="field-copy">这是发给大模型的抽取指令。留空时，系统会按当前工作区意图自动生成。</div>
+                </div>
+                <div class="field-actions">
+                  <button class="mini-btn" type="button" :disabled="!form.intentQuery.trim() || generatingPrompt" @click="generatePrompt">
+                    {{ generatingPrompt ? '生成中...' : '按意图生成' }}
+                  </button>
+                  <button class="mini-btn mini-btn-ghost" type="button" @click="resetPromptToAuto">
+                    改回自动生成
+                  </button>
+                </div>
+              </div>
+              <textarea
+                id="workspace-prompt"
+                v-model="form.extractionPrompt"
+                class="input workspace-prompt"
+                placeholder="这里会显示当前工作区的抽取提示词。"
+              />
+            </section>
           </div>
 
           <div class="workspace-actions">
             <button class="btn btn-secondary" @click="closePanel">取消</button>
-            <button
-              class="btn btn-primary"
-              :disabled="!form.intentQuery.trim()"
-              @click="submitPanel"
-            >
-              {{ editingId ? '保存修改' : '创建工作区' }}
+            <button class="btn btn-primary" :disabled="!form.intentQuery.trim() || saving" @click="submitPanel">
+              {{ saving ? '保存中...' : editingId ? '保存工作区' : '创建工作区' }}
             </button>
           </div>
         </div>
@@ -78,15 +115,18 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { useGraphStore } from '@/stores/graphStore'
+import { previewWorkspacePromptApi } from '@/services/apiClient'
 
 const graphStore = useGraphStore()
 
 const creating = ref(false)
 const editingId = ref(null)
+const generatingPrompt = ref(false)
+const saving = ref(false)
 const form = reactive({
   name: '',
   intentQuery: '',
-  intentSummary: ''
+  extractionPrompt: ''
 })
 
 const workspaceList = computed(() => graphStore.savedGraphs)
@@ -94,7 +134,13 @@ const workspaceList = computed(() => graphStore.savedGraphs)
 function resetForm() {
   form.name = ''
   form.intentQuery = ''
-  form.intentSummary = ''
+  form.extractionPrompt = ''
+}
+
+function getWorkspaceNameFromIntent(intentQuery = '') {
+  const text = String(intentQuery || '').trim()
+  if (!text) return '未命名工作区'
+  return text.length > 18 ? `${text.slice(0, 18)}...` : text
 }
 
 async function loadGraph(graphId) {
@@ -113,33 +159,59 @@ function openEditPanel(workspace) {
   editingId.value = workspace.id
   form.name = workspace.name || ''
   form.intentQuery = workspace.intentQuery || ''
-  form.intentSummary = workspace.intentSummary || ''
+  form.extractionPrompt = workspace.extractionPrompt || ''
 }
 
 function closePanel() {
   creating.value = false
   editingId.value = null
+  generatingPrompt.value = false
+  saving.value = false
   resetForm()
 }
 
-async function submitPanel() {
-  if (!form.intentQuery.trim()) return
+async function generatePrompt() {
+  const intentQuery = form.intentQuery.trim()
+  if (!intentQuery) return
 
-  if (editingId.value) {
-    await graphStore.renameGraph(editingId.value, {
-      name: form.name.trim() || '未命名工作区',
-      intentQuery: form.intentQuery.trim(),
-      intentSummary: form.intentSummary.trim()
+  generatingPrompt.value = true
+  try {
+    const response = await previewWorkspacePromptApi({
+      name: String(form.name || '').trim(),
+      intentQuery
     })
-  } else {
-    await graphStore.createWorkspace({
-      name: form.name.trim() || '未命名工作区',
-      intentQuery: form.intentQuery.trim(),
-      intentSummary: form.intentSummary.trim()
-    })
+    form.extractionPrompt = response?.extractionPrompt || ''
+  } finally {
+    generatingPrompt.value = false
+  }
+}
+
+function resetPromptToAuto() {
+  form.extractionPrompt = ''
+}
+
+async function submitPanel() {
+  const intentQuery = form.intentQuery.trim()
+  if (!intentQuery || saving.value) return
+
+  saving.value = true
+  const payload = {
+    name: String(form.name || '').trim() || getWorkspaceNameFromIntent(intentQuery),
+    intentQuery,
+    intentSummary: '',
+    extractionPrompt: String(form.extractionPrompt || '').trim()
   }
 
-  closePanel()
+  try {
+    if (editingId.value) {
+      await graphStore.renameGraph(editingId.value, payload)
+    } else {
+      await graphStore.createWorkspace(payload)
+    }
+    closePanel()
+  } finally {
+    saving.value = false
+  }
 }
 
 async function deleteGraph(graphId) {
@@ -306,44 +378,174 @@ defineExpose({ openCreatePanel })
 }
 
 .workspace-card {
-  width: min(680px, calc(100vw - 32px));
+  width: min(920px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
   display: grid;
-  gap: 14px;
+  gap: 20px;
   padding: 28px;
   border-radius: 28px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 249, 252, 0.98));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 248, 251, 0.98));
   border: 1px solid rgba(148, 163, 184, 0.2);
   box-shadow: 0 28px 80px rgba(15, 23, 42, 0.22);
+  overflow: auto;
 }
 
-.workspace-kicker {
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
+.workspace-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 .workspace-title {
-  font-size: 28px;
-  line-height: 1.1;
+  font-size: 24px;
+  line-height: 1.2;
   font-weight: 700;
 }
 
-.workspace-copy {
+.workspace-subtitle {
+  margin-top: 8px;
   font-size: 13px;
   line-height: 1.7;
   color: var(--color-text-secondary);
 }
 
-.workspace-fields {
+.workspace-close {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.96);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-grid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.workspace-section {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  display: grid;
+  gap: 8px;
+  box-shadow: none;
+}
+
+.workspace-section-full {
+  grid-column: 1 / -1;
+}
+
+.field-head {
+  display: grid;
+  gap: 4px;
+}
+
+.field-head-inline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.field-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.workspace-intent,
-.workspace-summary {
-  min-height: 112px;
+.field-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.field-copy {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.field-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mini-btn {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mini-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mini-btn-ghost {
+  background: rgba(241, 245, 249, 0.95);
+  color: var(--color-text-secondary);
+}
+
+.workspace-name {
+  height: 56px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.36);
+  background: rgba(255, 255, 255, 1);
+  box-shadow: none;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.workspace-intent {
+  height: 148px;
   resize: none;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.36);
+  background: rgba(255, 255, 255, 1);
+  box-shadow: none;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--color-text);
+}
+
+.workspace-prompt {
+  min-height: 280px;
+  resize: vertical;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(255, 255, 255, 1);
+  box-shadow: none;
+  font-size: 13px;
+  line-height: 1.7;
+  font-family: var(--font-mono);
+}
+
+.workspace-name:focus,
+.workspace-intent:focus,
+.workspace-prompt:focus {
+  outline: none;
+  border-color: rgba(79, 109, 245, 0.72);
+  box-shadow: 0 0 0 4px rgba(79, 109, 245, 0.08);
 }
 
 .workspace-actions {
@@ -352,14 +554,44 @@ defineExpose({ openCreatePanel })
   gap: 10px;
 }
 
-@media (max-width: 720px) {
-  .workspace-card {
-    padding: 22px;
-    border-radius: 22px;
+.workspace-panel-enter-active,
+.workspace-panel-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.workspace-panel-enter-from,
+.workspace-panel-leave-to {
+  opacity: 0;
+}
+
+@media (max-width: 900px) {
+  .workspace-overlay {
+    padding: 16px;
   }
 
-  .workspace-title {
-    font-size: 22px;
+  .workspace-card {
+    width: min(100vw - 24px, 100%);
+    padding: 20px;
+    border-radius: 20px;
+  }
+
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .field-head-inline {
+    flex-direction: column;
+  }
+
+  .field-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .field-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 }
 </style>

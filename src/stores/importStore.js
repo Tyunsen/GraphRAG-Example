@@ -46,6 +46,51 @@ function getPersistedJobId(workspaceId) {
   return loadPersistedJobs()[workspaceId] || null
 }
 
+function hasGraphContent(graph) {
+  const nodeCount = Array.isArray(graph?.nodes) ? graph.nodes.length : 0
+  const edgeCount = Array.isArray(graph?.edges) ? graph.edges.length : 0
+  return nodeCount > 0 || edgeCount > 0
+}
+
+function scoreDecodedText(text = '') {
+  const content = String(text || '')
+  if (!content.trim()) return -1
+
+  let score = 0
+  const replacementCount = (content.match(/\uFFFD/g) || []).length
+  score -= replacementCount * 20
+
+  if (/[\u4e00-\u9fff]/.test(content)) score += 40
+  if (/[\r\n]/.test(content)) score += 8
+  if (!/\u0000/.test(content)) score += 8
+  if (!/�/.test(content)) score += 12
+
+  return score
+}
+
+function decodeTextBuffer(arrayBuffer) {
+  const uint8 = new Uint8Array(arrayBuffer)
+  const encodings = ['utf-8', 'gb18030', 'gbk', 'utf-16le']
+  let best = ''
+  let bestScore = Number.NEGATIVE_INFINITY
+
+  for (const encoding of encodings) {
+    try {
+      const decoded = new TextDecoder(encoding, { fatal: false }).decode(uint8)
+      const score = scoreDecodedText(decoded)
+      if (score > bestScore) {
+        best = decoded
+        bestScore = score
+      }
+    } catch {
+      // Ignore unsupported encodings.
+    }
+  }
+
+  if (best) return best
+  return new TextDecoder('utf-8', { fatal: false }).decode(uint8)
+}
+
 export const useImportStore = defineStore('import', () => {
   const graphStore = useGraphStore()
   const settings = useSettingsStore()
@@ -152,16 +197,27 @@ export const useImportStore = defineStore('import', () => {
   async function prepareFilePayload(file) {
     const ext = getExt(file.name)
     let content = ''
+    let arrayBuffer = null
 
     if (ext === 'pdf') {
-      content = await extractPdfText(await file.arrayBuffer())
+      arrayBuffer = await file.arrayBuffer()
+      content = await extractPdfText(arrayBuffer)
     } else {
-      content = await file.text()
+      arrayBuffer = await file.arrayBuffer()
+      content = decodeTextBuffer(arrayBuffer)
     }
 
     let precomputedGraph = null
-    if (ext === 'json') precomputedGraph = parseJSON(content)
-    else if (ext === 'csv') precomputedGraph = parseCSV(content)
+    try {
+      if (ext === 'json') precomputedGraph = parseJSON(content)
+      else if (ext === 'csv') precomputedGraph = parseCSV(content)
+    } catch {
+      precomputedGraph = null
+    }
+
+    if (!hasGraphContent(precomputedGraph)) {
+      precomputedGraph = null
+    }
 
     return {
       id: generateId('f'),

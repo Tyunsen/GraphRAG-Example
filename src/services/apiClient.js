@@ -24,6 +24,13 @@ export async function createWorkspaceApi(payload) {
   })
 }
 
+export async function previewWorkspacePromptApi(payload) {
+  return request('/workspaces/prompt-preview', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
 export async function fetchGraph(graphId) {
   return request(`/workspaces/${graphId}`)
 }

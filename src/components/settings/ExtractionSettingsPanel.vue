@@ -1,8 +1,8 @@
 <template>
   <div class="settings-panel">
     <div class="settings-panel-header">
-      <h3>抽取提示词</h3>
-      <p>管理非结构化文档的意图抽取策略和提示词模板。</p>
+      <h3>抽取配置</h3>
+      <p>这里只管理是否启用模型抽取。每个工作区自己的抽取提示词，在“新建 / 编辑工作区”里维护。</p>
     </div>
 
     <div class="settings-card">
@@ -10,27 +10,21 @@
         <label class="toggle-label">
           <input type="checkbox" v-model="settings.useLLMExtraction" class="toggle-checkbox" />
           <span class="toggle-switch"></span>
-          <span>启用 LLM 抽取</span>
+          <span>启用模型抽取</span>
         </label>
-        <span class="hint" v-if="!settings.isApiConfigured">需先配置模型接口</span>
+        <span class="hint" v-if="!settings.isApiConfigured">需要先配置模型接口</span>
       </div>
 
       <p class="card-copy">
-        `TXT / MD / PDF` 会按工作区总意图调用模型抽取实体、事件和关系。`JSON / CSV` 继续走结构化解析。
+        `TXT / MD / PDF` 会按当前工作区的意图和抽取提示词调用模型抽取。`JSON / CSV` 仍然优先走结构化解析。
       </p>
     </div>
 
     <div class="settings-card">
-      <div class="card-title">提示词模板</div>
-      <textarea
-        class="input prompt-textarea"
-        v-model="settings.extractionPrompt"
-        rows="14"
-        placeholder="输入自定义抽取提示词..."
-      ></textarea>
-      <div class="panel-actions">
-        <button class="btn btn-secondary btn-sm" @click="settings.resetExtractionPrompt()">恢复默认模板</button>
-      </div>
+      <div class="card-title">提示词管理方式</div>
+      <p class="card-copy">
+        工作区意图变化时，系统会基于意图自动生成一份默认抽取提示词。你也可以在编辑工作区时手动修改。
+      </p>
     </div>
   </div>
 </template>
@@ -131,17 +125,5 @@ const settings = useSettingsStore()
 .hint {
   font-size: 11px;
   color: var(--color-text-muted);
-}
-
-.prompt-textarea {
-  resize: vertical;
-  min-height: 280px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.panel-actions {
-  margin-top: 12px;
 }
 </style>

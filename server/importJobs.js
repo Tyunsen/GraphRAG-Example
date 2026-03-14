@@ -1,9 +1,10 @@
-import { persistImportedFile } from './fileGraphService.js'
+import { findDuplicateWorkspaceFile, persistImportedFile } from './fileGraphService.js'
 import { extractFallbackGraph } from './fallbackExtractor.js'
 import { extractWithServerLLM } from './serverLLMExtractor.js'
 import { filterGraphByIntent, focusContentByIntent } from './workspaceIntent.js'
 
 const jobs = new Map()
+const graphPersistLocks = new Map()
 const JOB_CONCURRENCY = 3
 
 function makeId(prefix = 'job') {
@@ -67,13 +68,37 @@ function setStage(item, stageKey, status, detail = '') {
 }
 
 function summarizeGraph(result, method) {
-  const nodes = result.nodes || []
+  const nodes = Array.isArray(result?.nodes) ? result.nodes : []
   return {
     method,
     nodeCount: nodes.length,
-    edgeCount: (result.edges || []).length,
+    edgeCount: Array.isArray(result?.edges) ? result.edges.length : 0,
     entityLabels: nodes.filter(node => node.type !== '事件').slice(0, 6).map(node => node.label),
     eventLabels: nodes.filter(node => node.type === '事件').slice(0, 4).map(node => node.label)
+  }
+}
+
+function getEmptyGraphMessage(method = '') {
+  if (method === 'intent-filtered') return '未命中工作区意图，已只导入原文'
+  return '未抽取到可用节点，已只导入原文'
+}
+
+async function withGraphPersistLock(graphId, task) {
+  const previous = graphPersistLocks.get(graphId) || Promise.resolve()
+  let release
+  const current = new Promise(resolve => {
+    release = resolve
+  })
+  graphPersistLocks.set(graphId, previous.then(() => current))
+
+  await previous
+  try {
+    return await task()
+  } finally {
+    release()
+    if (graphPersistLocks.get(graphId) === current) {
+      graphPersistLocks.delete(graphId)
+    }
   }
 }
 
@@ -109,10 +134,16 @@ function resetItemForRetry(item) {
 }
 
 function recomputeJobStats(job) {
-  job.completedFiles = job.items.filter(item => item.status === 'done').length
+  job.completedFiles = job.items.filter(item => ['done', 'skipped'].includes(item.status)).length
   job.failedFiles = job.items.filter(item => item.status === 'error').length
   job.totalFiles = job.items.length
   job.updatedAt = now()
+}
+
+function hasGraphContent(graph) {
+  const nodeCount = Array.isArray(graph?.nodes) ? graph.nodes.length : 0
+  const edgeCount = Array.isArray(graph?.edges) ? graph.edges.length : 0
+  return nodeCount > 0 || edgeCount > 0
 }
 
 function applyIntentFiltering(item, job, graph) {
@@ -126,7 +157,7 @@ function applyIntentFiltering(item, job, graph) {
 }
 
 async function extractGraphForItem(job, item) {
-  if (item.precomputedGraph?.nodes || item.precomputedGraph?.edges) {
+  if (hasGraphContent(item.precomputedGraph)) {
     appendLog(item, '使用结构化预处理结果')
     return {
       graph: applyIntentFiltering(item, job, {
@@ -169,6 +200,7 @@ async function extractGraphForItem(job, item) {
     const graph = await extractWithServerLLM(focused.content, {
       workspaceIntent: job.intentQuery,
       extractionProfile: job.intentProfile,
+      promptOverride: job.extractionPrompt || '',
       modelName: job.options.modelName,
       temperature: job.options.temperature,
       maxTokens: job.options.maxTokens
@@ -197,28 +229,89 @@ async function processItem(job, item) {
   item.status = 'running'
   item.updatedAt = now()
 
-  setStage(item, 'parse', 'running', '正在接收和整理文本内容')
+  setStage(item, 'parse', 'running', '正在接收并整理文件内容')
   appendLog(item, '开始整理文件内容')
   setStage(item, 'parse', 'done', `已准备 ${item.content.length} 个字符`)
+
+  const duplicate = findDuplicateWorkspaceFile(job.graphId, item.content, item.id)
+  if (duplicate) {
+    appendLog(item, `检测到重复文件，与 ${duplicate.fileName} 内容一致，已跳过`)
+    item.summary = {
+      method: 'duplicate-skip',
+      nodeCount: 0,
+      edgeCount: 0,
+      entityLabels: [],
+      eventLabels: [],
+      duplicateOf: duplicate.fileName
+    }
+    item.result = {
+      skipped: true,
+      duplicateOf: duplicate
+    }
+    setStage(item, 'extract', 'done', '内容重复，跳过抽取')
+    setStage(item, 'persist', 'done', `已存在同内容文件：${duplicate.fileName}`)
+    setStage(item, 'complete', 'done', '已跳过重复文件')
+    item.status = 'skipped'
+    item.updatedAt = now()
+    return
+  }
 
   setStage(item, 'extract', 'running', '正在抽取实体、事件和关系')
   const { graph, method } = await extractGraphForItem(job, item)
   item.summary = summarizeGraph(graph, method)
   setStage(item, 'extract', 'done', `抽取到 ${item.summary.nodeCount} 个节点，${item.summary.edgeCount} 条关系`)
 
+  const hasKnowledgeGraph = item.summary.nodeCount > 0 || item.summary.edgeCount > 0
+  const importMessage = hasKnowledgeGraph ? '' : getEmptyGraphMessage(method)
+
   setStage(item, 'persist', 'running', '正在更新当前工作区图谱')
   appendLog(item, '开始写入段落、mention 和 canonical 图数据')
-  const persisted = await persistImportedFile({
-    graphId: job.graphId,
-    id: item.id,
-    fileName: item.fileName,
-    content: item.content,
-    fileType: item.fileType,
-    fileSize: item.fileSize,
-    nodes: graph.nodes,
-    edges: graph.edges
+  const persisted = await withGraphPersistLock(job.graphId, async () => {
+    return persistImportedFile({
+      graphId: job.graphId,
+      id: item.id,
+      fileName: item.fileName,
+      content: item.content,
+      fileType: item.fileType,
+      fileSize: item.fileSize,
+      importStatus: hasKnowledgeGraph ? 'completed' : 'no-match',
+      importMessage,
+      nodes: graph.nodes,
+      edges: graph.edges
+    })
   })
+
+  if (persisted?.skipped) {
+    appendLog(item, `检测到重复文件，与 ${persisted.duplicateOf?.fileName || '已有文件'} 内容一致，已跳过`)
+    item.summary = {
+      method: 'duplicate-skip',
+      nodeCount: 0,
+      edgeCount: 0,
+      entityLabels: [],
+      eventLabels: [],
+      duplicateOf: persisted.duplicateOf?.fileName || ''
+    }
+    item.result = persisted
+    setStage(item, 'persist', 'done', `已存在同内容文件：${persisted.duplicateOf?.fileName || '未知文件'}`)
+    setStage(item, 'complete', 'done', '已跳过重复文件')
+    item.status = 'skipped'
+    item.updatedAt = now()
+    return
+  }
+
   item.result = persisted
+  if (!hasKnowledgeGraph) {
+    item.result = {
+      ...persisted,
+      skipReason: 'no-match'
+    }
+    setStage(item, 'persist', 'done', importMessage)
+    setStage(item, 'complete', 'done', importMessage)
+    appendLog(item, importMessage)
+    item.status = 'skipped'
+    item.updatedAt = now()
+    return
+  }
   setStage(item, 'persist', 'done', `图谱更新为 ${persisted.graph.nodeCount} 个节点，${persisted.graph.edgeCount} 条关系`)
   setStage(item, 'complete', 'done', '导入完成')
   appendLog(item, '文件导入完成')
@@ -272,6 +365,7 @@ export function createImportJob({
   graphId,
   intentQuery = '',
   intentProfile = null,
+  extractionPrompt = '',
   files = [],
   options = {}
 }) {
@@ -280,6 +374,7 @@ export function createImportJob({
     graphId,
     intentQuery,
     intentProfile,
+    extractionPrompt,
     options,
     status: 'queued',
     totalFiles: files.length,
