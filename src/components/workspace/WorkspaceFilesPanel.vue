@@ -242,12 +242,15 @@ watch(
     detailError.value = ''
     detailTab.value = 'content'
     await refreshFiles()
+    if (!selectedRowKey.value && unifiedFiles.value.length > 0) {
+      selectedRowKey.value = unifiedFiles.value[0].rowKey
+    }
   },
   { immediate: true }
 )
 
 watch(
-  () => [graphStore.currentGraphId, importStore.completedCount, importStore.failedCount, workspaceFiles.value.length],
+  () => [importStore.completedCount, importStore.failedCount, importStore.activeJobStatus],
   async () => {
     if (!graphStore.currentGraphId) return
     await refreshFiles()
