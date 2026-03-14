@@ -1064,7 +1064,7 @@ function aggregateEntityCanonicalRows(graphId, entityRows = [], now = Date.now()
     }
 
     return {
-      id: makeStableId('ce', entry.key),
+      id: makeStableId('ce', `${graphId}|${entry.key}`),
       graphId,
       canonicalKey: entry.key,
       label,
@@ -1074,7 +1074,7 @@ function aggregateEntityCanonicalRows(graphId, entityRows = [], now = Date.now()
       supportCount,
       createdAt: entry.createdAt,
       updatedAt: now,
-      nodeId: makeStableId('n', entry.key),
+      nodeId: makeStableId('n', `${graphId}|${entry.key}`),
       sourceFile: [...entry.fileNames][0] || ''
     }
   })
@@ -1146,7 +1146,7 @@ function aggregateEventCanonicalRows(graphId, eventRows = [], entityKeyAliasMap 
     }
 
     return {
-      id: makeStableId('cv', entry.key),
+      id: makeStableId('cv', `${graphId}|${entry.key}`),
       graphId,
       canonicalKey: entry.key,
       label,
@@ -1163,7 +1163,7 @@ function aggregateEventCanonicalRows(graphId, eventRows = [], entityKeyAliasMap 
       supportCount,
       createdAt: entry.createdAt,
       updatedAt: now,
-      nodeId: makeStableId('n', entry.key),
+      nodeId: makeStableId('n', `${graphId}|${entry.key}`),
       sourceFile: [...entry.fileNames][0] || ''
     }
   })
