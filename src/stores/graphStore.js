@@ -524,6 +524,11 @@ export const useGraphStore = defineStore('graph', () => {
         if (!loaded) {
           currentGraphId.value = null
           persistCurrentGraphId()
+          if (savedGraphs.value.length > 0) {
+            currentGraphId.value = savedGraphs.value[0].id
+            persistCurrentGraphId()
+            await loadGraph(currentGraphId.value)
+          }
         }
       } else if (savedGraphs.value.length > 0) {
         currentGraphId.value = savedGraphs.value[0].id
