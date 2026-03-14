@@ -55,12 +55,14 @@ export const useRagStore = defineStore('rag', () => {
       resetGraphView()
       return
     }
+
     try {
       messages.value = await fetchMessages(sessionId)
     } catch (error) {
       console.warn('[ragStore] failed to load messages:', error.message)
       messages.value = []
     }
+
     lastContext.value = null
     resetGraphView()
   }
@@ -115,10 +117,12 @@ export const useRagStore = defineStore('rag', () => {
         await createSessionApi(graphId, { id, title: '默认会话' })
         sessions.value = await fetchSessions(graphId)
       }
+
       const stored = loadStoredSessions()[graphId]
       currentSessionId.value = sessions.value.some(item => item.id === stored)
         ? stored
         : sessions.value[0]?.id || null
+
       if (currentSessionId.value) persistStoredSession(graphId, currentSessionId.value)
       await loadMessagesForSession(currentSessionId.value)
     } catch (error) {
@@ -133,6 +137,7 @@ export const useRagStore = defineStore('rag', () => {
   async function createSession(title = '新会话') {
     const graphId = graphStore.currentGraphId
     if (!graphId) return
+
     const id = generateId('s')
     await createSessionApi(graphId, { id, title })
     sessions.value = await fetchSessions(graphId)
@@ -151,15 +156,18 @@ export const useRagStore = defineStore('rag', () => {
   }
 
   async function renameSession(sessionId, title) {
-    if (!title.trim()) return
-    await renameSessionApi(sessionId, title.trim())
+    const nextTitle = title.trim()
+    if (!nextTitle) return
+
+    await renameSessionApi(sessionId, nextTitle)
     const target = sessions.value.find(item => item.id === sessionId)
-    if (target) target.title = title.trim()
+    if (target) target.title = nextTitle
   }
 
   async function deleteSession(sessionId) {
     await deleteSessionApi(sessionId)
     sessions.value = sessions.value.filter(item => item.id !== sessionId)
+
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = sessions.value[0]?.id || null
       persistStoredSession(graphStore.currentGraphId, currentSessionId.value)
@@ -204,6 +212,7 @@ export const useRagStore = defineStore('rag', () => {
     lastContext.value = null
     resetGraphView()
     if (!currentSessionId.value) return
+
     try {
       await clearMessagesApi(currentSessionId.value)
     } catch (error) {

@@ -1,31 +1,25 @@
 <template>
   <div class="graph-list">
-    <div class="graph-list-header">
-      <div>
-        <div class="graph-list-title">项目列表</div>
-        <div class="graph-list-subtitle">每个工作区承载自己的文件、图谱和会话。</div>
-      </div>
-      <button class="create-btn" @click="toggleCreate">
-        {{ creating ? '取消' : '新建' }}
-      </button>
-    </div>
-
     <div v-if="creating" class="workspace-form">
-      <input class="input" v-model="createName" placeholder="工作区名称，例如：伊朗局势追踪" />
+      <div class="workspace-form-title">新建工作区</div>
+      <input class="input" v-model="createName" placeholder="工作区名称，例如：伊朗局势跟踪" />
       <textarea
         class="input workspace-intent"
         v-model="createIntent"
         placeholder="输入这个工作区的总意图，例如：围绕伊朗战争，提取军事打击、核设施、油价、航运风险与外交信号相关的实体、事件与事件链。"
       />
-      <button class="btn btn-primary btn-block" @click="submitCreate">创建工作区</button>
+      <div class="inline-actions">
+        <button class="btn btn-primary" @click="submitCreate">创建</button>
+        <button class="btn btn-secondary" @click="toggleCreate(false)">取消</button>
+      </div>
     </div>
 
     <div v-if="graphStore.savedGraphs.length === 0" class="graph-list-empty">
       <p>还没有工作区</p>
-      <p class="text-muted">先创建一个工作区，再导入文档和发起会话。</p>
+      <button class="empty-create-btn" @click="toggleCreate(true)">创建第一个工作区</button>
     </div>
 
-    <div class="graph-list-items" v-else>
+    <div v-else class="graph-list-items">
       <button
         v-for="workspace in sortedGraphs"
         :key="workspace.id"
@@ -39,9 +33,8 @@
             <span v-if="graphStore.currentGraphId === workspace.id" class="graph-item-badge">当前</span>
           </div>
           <div class="graph-item-meta">
-            {{ workspace.fileCount || 0 }} 文档 · {{ workspace.sessionCount || 0 }} 会话 · {{ workspace.nodeCount }} 节点
+            {{ workspace.fileCount || 0 }} 文档 · {{ workspace.sessionCount || 0 }} 会话 · {{ workspace.nodeCount || 0 }} 节点
           </div>
-          <div v-if="graphStore.currentGraphId === workspace.id" class="graph-item-intent">{{ workspace.intentQuery }}</div>
           <div class="graph-item-time">{{ formatTime(workspace.updatedAt || workspace.createdAt) }}</div>
         </div>
 
@@ -53,13 +46,9 @@
     </div>
 
     <div v-if="editingId" class="workspace-form workspace-form-edit">
-      <div class="graph-list-title">编辑工作区</div>
+      <div class="workspace-form-title">编辑工作区</div>
       <input class="input" v-model="editName" placeholder="工作区名称" />
-      <textarea
-        class="input workspace-intent"
-        v-model="editIntent"
-        placeholder="更新这个工作区的总意图"
-      />
+      <textarea class="input workspace-intent" v-model="editIntent" placeholder="更新这个工作区的总意图" />
       <div class="inline-actions">
         <button class="btn btn-primary" @click="confirmEdit">保存</button>
         <button class="btn btn-secondary" @click="cancelEdit">取消</button>
@@ -91,12 +80,16 @@ async function loadGraph(graphId) {
   await graphStore.loadGraph(graphId)
 }
 
-function toggleCreate() {
-  creating.value = !creating.value
+function toggleCreate(force) {
+  creating.value = typeof force === 'boolean' ? force : !creating.value
   if (!creating.value) {
     createName.value = ''
     createIntent.value = ''
   }
+}
+
+function openCreatePanel() {
+  toggleCreate(true)
 }
 
 async function submitCreate() {
@@ -144,6 +137,8 @@ function formatTime(ts) {
   if (date.toDateString() === now.toDateString()) return `今天 ${time}`
   return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')} ${time}`
 }
+
+defineExpose({ openCreatePanel })
 </script>
 
 <style scoped>
@@ -152,102 +147,99 @@ function formatTime(ts) {
   flex-direction: column;
   gap: 12px;
 }
-.graph-list-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-.graph-list-title {
-  font-size: 13px;
-  font-weight: 700;
-}
-.graph-list-subtitle {
-  margin-top: 4px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--color-text-secondary);
-}
-.create-btn {
-  flex-shrink: 0;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(79, 109, 245, 0.1);
-  color: var(--color-primary);
-  font-size: 12px;
-  font-weight: 600;
-}
+
 .workspace-form {
   display: grid;
   gap: 8px;
   padding: 12px;
-  border-radius: 14px;
+  border-radius: 16px;
   background: rgba(248, 250, 252, 0.95);
-  border: 1px solid var(--color-border);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
+
+.workspace-form-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .workspace-form-edit {
   margin-top: 4px;
 }
+
 .workspace-intent {
-  min-height: 92px;
-  resize: vertical;
+  min-height: 108px;
+  resize: none;
 }
-.btn-block {
-  width: 100%;
-}
+
 .inline-actions {
   display: flex;
   gap: 8px;
 }
+
 .graph-list-empty {
   text-align: center;
-  padding: 18px 10px;
-  border-radius: 14px;
+  padding: 24px 12px;
+  border-radius: 16px;
   background: rgba(248, 250, 252, 0.72);
   border: 1px dashed rgba(148, 163, 184, 0.4);
   color: var(--color-text-muted);
   font-size: 13px;
+  display: grid;
+  gap: 12px;
 }
-.text-muted {
+
+.empty-create-btn {
+  justify-self: center;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #fff;
   font-size: 12px;
-  margin-top: 4px;
+  font-weight: 600;
 }
+
 .graph-list-items {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
+
 .graph-item {
   width: 100%;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.88);
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
   border: 1px solid transparent;
   text-align: left;
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
+
 .graph-item:hover {
   background: rgba(255, 255, 255, 0.98);
   border-color: rgba(148, 163, 184, 0.24);
   transform: translateY(-1px);
 }
+
 .graph-item.active {
   border-color: rgba(79, 109, 245, 0.28);
   background: rgba(79, 109, 245, 0.08);
 }
+
 .graph-item-main {
   min-width: 0;
   flex: 1;
 }
+
 .graph-item-topline {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+
 .graph-item-name {
   font-size: 13px;
   font-weight: 700;
@@ -255,6 +247,7 @@ function formatTime(ts) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .graph-item-badge {
   font-size: 10px;
   padding: 2px 6px;
@@ -262,32 +255,28 @@ function formatTime(ts) {
   background: var(--color-primary);
   color: #fff;
 }
+
 .graph-item-meta,
-.graph-item-time,
-.graph-item-intent {
+.graph-item-time {
   font-size: 11px;
   color: var(--color-text-secondary);
 }
+
 .graph-item-meta {
   margin-top: 4px;
 }
-.graph-item-intent {
-  margin-top: 6px;
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
+
 .graph-item-time {
   margin-top: 6px;
 }
+
 .graph-item-actions {
   display: flex;
   flex-direction: column;
   gap: 4px;
   flex-shrink: 0;
 }
+
 .action-btn {
   padding: 4px 8px;
   border-radius: 8px;
@@ -295,10 +284,12 @@ function formatTime(ts) {
   color: var(--color-text-secondary);
   font-size: 11px;
 }
+
 .action-btn:hover {
   background: rgba(226, 232, 240, 0.95);
   color: var(--color-text);
 }
+
 .action-btn-danger {
   color: var(--color-danger);
 }

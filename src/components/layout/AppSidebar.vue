@@ -2,31 +2,35 @@
   <aside class="app-sidebar">
     <div class="sidebar-topbar">
       <div class="sidebar-brand">Graph Workspace</div>
-      <div class="sidebar-caption">先选工作区，再进入它的会话和文件。</div>
+      <button class="sidebar-create" @click="graphListRef?.openCreatePanel()">新建</button>
     </div>
 
     <div class="sidebar-scroll">
-      <GraphList />
+      <GraphList ref="graphListRef" />
     </div>
 
     <div class="sidebar-footer">
-      <button class="settings-btn" @click="settingsOpen = !settingsOpen">
-        <span>⚙</span>
+      <button class="settings-btn" @click="settingsOpen = true">
+        <span class="settings-icon">⚙</span>
         <span>设置</span>
       </button>
     </div>
 
-    <transition name="settings-sheet">
-      <div v-if="settingsOpen" class="settings-sheet">
-        <div class="settings-sheet-header">
-          <div>
-            <div class="settings-sheet-kicker">Settings</div>
-            <div class="settings-sheet-title">模型与抽取配置</div>
+    <transition name="settings-overlay">
+      <div v-if="settingsOpen" class="settings-overlay" @click="settingsOpen = false">
+        <div class="settings-dialog" @click.stop>
+          <div class="settings-dialog-header">
+            <div>
+              <div class="settings-dialog-kicker">Settings</div>
+              <div class="settings-dialog-title">模型与抽取配置</div>
+              <div class="settings-dialog-subtitle">管理 API、模型参数和抽取策略。</div>
+            </div>
+            <button class="settings-close" @click="settingsOpen = false">关闭</button>
           </div>
-          <button class="settings-close" @click="settingsOpen = false">关闭</button>
-        </div>
-        <div class="settings-sheet-body">
-          <ApiSettings />
+
+          <div class="settings-dialog-body">
+            <ApiSettings />
+          </div>
         </div>
       </div>
     </transition>
@@ -39,6 +43,7 @@ import GraphList from '@/components/import/GraphList.vue'
 import ApiSettings from '@/components/rag/ApiSettings.vue'
 
 const settingsOpen = ref(false)
+const graphListRef = ref(null)
 </script>
 
 <style scoped>
@@ -52,28 +57,39 @@ const settingsOpen = ref(false)
   position: relative;
   overflow: hidden;
 }
+
 .sidebar-topbar {
   padding: 18px 16px 12px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(255, 255, 255, 0.66);
+  background: rgba(255, 255, 255, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
+
 .sidebar-brand {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.sidebar-caption {
-  margin-top: 4px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--color-text-secondary);
+
+.sidebar-create {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
 }
+
 .sidebar-scroll {
   flex: 1;
   overflow-y: auto;
   padding: 14px 14px 88px;
 }
+
 .sidebar-footer {
   position: absolute;
   left: 0;
@@ -82,6 +98,7 @@ const settingsOpen = ref(false)
   padding: 12px 14px 14px;
   background: linear-gradient(180deg, rgba(241, 243, 238, 0), rgba(241, 243, 238, 0.98) 40%);
 }
+
 .settings-btn {
   width: 100%;
   display: flex;
@@ -90,63 +107,96 @@ const settingsOpen = ref(false)
   gap: 8px;
   padding: 12px 14px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(148, 163, 184, 0.22);
   font-weight: 600;
   color: var(--color-text);
 }
-.settings-sheet {
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 74px;
-  max-height: min(70vh, 820px);
+
+.settings-icon {
+  font-size: 14px;
+}
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.settings-dialog {
+  width: min(980px, calc(100vw - 48px));
+  height: min(860px, calc(100vh - 48px));
   display: flex;
   flex-direction: column;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.96);
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
   border: 1px solid rgba(148, 163, 184, 0.22);
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.14);
-  backdrop-filter: blur(16px);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.2);
   overflow: hidden;
 }
-.settings-sheet-header {
+
+.settings-dialog-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--color-border-light);
+  gap: 16px;
+  padding: 24px 28px 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.8);
 }
-.settings-sheet-kicker {
-  font-size: 10px;
-  letter-spacing: 0.12em;
+
+.settings-dialog-kicker {
+  font-size: 11px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--color-text-muted);
 }
-.settings-sheet-title {
-  margin-top: 4px;
-  font-size: 18px;
+
+.settings-dialog-title {
+  margin-top: 6px;
+  font-size: 28px;
   font-weight: 700;
 }
+
+.settings-dialog-subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
 .settings-close {
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(241, 245, 249, 0.95);
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(241, 245, 249, 0.96);
   color: var(--color-text-secondary);
   font-size: 12px;
+  font-weight: 600;
 }
-.settings-sheet-body {
+
+.settings-dialog-body {
+  flex: 1;
   overflow-y: auto;
-  padding: 0 16px 16px;
+  padding: 24px 28px 28px;
 }
-.settings-sheet-enter-active,
-.settings-sheet-leave-active {
+
+.settings-overlay-enter-active,
+.settings-overlay-leave-active {
   transition: opacity 0.18s ease, transform 0.18s ease;
 }
-.settings-sheet-enter-from,
-.settings-sheet-leave-to {
+
+.settings-overlay-enter-from,
+.settings-overlay-leave-to {
   opacity: 0;
-  transform: translateY(12px);
+}
+
+.settings-overlay-enter-from .settings-dialog,
+.settings-overlay-leave-to .settings-dialog {
+  transform: translateY(12px) scale(0.99);
 }
 </style>
