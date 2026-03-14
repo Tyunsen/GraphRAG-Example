@@ -12,6 +12,7 @@
           :msg="msg"
           :active="ragStore.activeMessageId === msg.id"
           @select="ragStore.selectMessage"
+          @focus-evidence="focusEvidenceFromMessage"
         />
 
         <div v-if="ragStore.isLoading" class="chat-loading">
@@ -80,6 +81,14 @@ async function sendMessage() {
   inputText.value = ''
   resizeInput()
   await askQuestion(text)
+}
+
+function focusEvidenceFromMessage(payload) {
+  if (!payload?.evidence) return
+  if (payload.messageId && ragStore.activeMessageId !== payload.messageId) {
+    ragStore.selectMessage(payload.messageId)
+  }
+  graphStore.focusEvidenceItem(payload.evidence)
 }
 
 watch(

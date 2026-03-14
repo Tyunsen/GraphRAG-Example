@@ -252,6 +252,18 @@ export const useGraphStore = defineStore('graph', () => {
     graphVersion.value++
   }
 
+  function setSelectedNode(nodeOrId) {
+    if (!nodeOrId) {
+      selectedNode.value = null
+      graphVersion.value++
+      return
+    }
+
+    const nodeId = typeof nodeOrId === 'string' ? nodeOrId : nodeOrId.id
+    selectedNode.value = nodes.value.get(nodeId) || null
+    graphVersion.value++
+  }
+
   function focusSubgraph(subgraph) {
     if (!subgraph?.nodes?.length) {
       showFullGraph()
@@ -269,6 +281,34 @@ export const useGraphStore = defineStore('graph', () => {
     )
     selectedNode.value = null
     graphVersion.value++
+  }
+
+  function focusEvidenceItem(evidence, options = {}) {
+    if (!evidence) {
+      showFullGraph()
+      clearHighlights()
+      return
+    }
+
+    const labels = [
+      ...(evidence.linkedNodes || []),
+      ...(evidence.linkedEvents || [])
+    ].filter(Boolean)
+
+    const seedIds = [...new Set(labels.map(resolveNodeId).filter(Boolean))]
+
+    if (seedIds.length === 0) {
+      showFullGraph()
+      clearHighlights()
+      return
+    }
+
+    const maxDepth = options.maxDepth ?? 1
+    const maxNodes = options.maxNodes ?? 28
+    const subgraph = bfsSubgraph(seedIds, maxDepth, maxNodes)
+    focusSubgraph(subgraph)
+    setHighlightedNodes(seedIds)
+    setSelectedNode(seedIds.length === 1 ? seedIds[0] : null)
   }
 
   function showFullGraph() {
@@ -476,7 +516,9 @@ export const useGraphStore = defineStore('graph', () => {
     clearGraph,
     bfsSubgraph,
     setHighlightedNodes,
+    setSelectedNode,
     focusSubgraph,
+    focusEvidenceItem,
     showFullGraph,
     clearHighlights,
     savedGraphs,

@@ -1,14 +1,20 @@
 <template>
   <div v-if="context" class="context-viewer">
     <div class="context-header" @click="expanded = !expanded">
-      <span class="context-toggle">{{ expanded ? '▼' : '▶' }}</span>
-      <span>证据来源 ({{ context.evidence?.length || 0 }} 段, {{ context.subgraph?.nodes?.length || 0 }} 节点)</span>
+      <span class="context-toggle">{{ expanded ? '▾' : '▸' }}</span>
+      <span>证据来源 ({{ context.evidence?.length || 0 }} 段 / {{ context.subgraph?.nodes?.length || 0 }} 节点)</span>
     </div>
 
     <div v-if="expanded" class="context-body">
       <div v-if="context.evidence?.length" class="evidence-list">
-        <div v-for="item in context.evidence" :key="item.chunkId" class="evidence-item">
-          <div class="evidence-meta">{{ item.fileName }} 第{{ item.paragraphIndex }}段</div>
+        <button
+          v-for="item in context.evidence"
+          :key="item.chunkId"
+          type="button"
+          class="evidence-item"
+          @click.stop="emit('focus-evidence', item)"
+        >
+          <div class="evidence-meta">{{ item.fileName }} 第 {{ item.paragraphIndex }} 段</div>
           <div class="evidence-text">{{ item.text }}</div>
           <div class="evidence-tags">
             <span
@@ -26,7 +32,7 @@
               {{ label }}
             </span>
           </div>
-        </div>
+        </button>
       </div>
     </div>
   </div>
@@ -40,6 +46,7 @@ defineProps({
   context: { type: Object, default: null }
 })
 
+const emit = defineEmits(['focus-evidence'])
 const expanded = ref(false)
 </script>
 
@@ -81,10 +88,25 @@ const expanded = ref(false)
 }
 
 .evidence-item {
+  width: 100%;
   padding: 8px;
+  text-align: left;
+  cursor: pointer;
   border-radius: var(--radius-md);
   background: var(--color-bg-card);
   border: 1px solid var(--color-border-light);
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.evidence-item:hover {
+  background: var(--color-bg-hover);
+  border-color: rgba(79, 109, 245, 0.28);
+  transform: translateY(-1px);
+}
+
+.evidence-item:focus-visible {
+  outline: 2px solid rgba(79, 109, 245, 0.42);
+  outline-offset: 2px;
 }
 
 .evidence-meta {

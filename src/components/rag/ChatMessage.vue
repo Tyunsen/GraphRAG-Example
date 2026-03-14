@@ -2,7 +2,11 @@
   <div class="chat-message" :class="[msg.role, { active }]" @click="$emit('select', msg.id)">
     <div class="msg-bubble">
       <div class="msg-content">{{ msg.content }}</div>
-      <ContextViewer v-if="msg.context" :context="msg.context" />
+      <ContextViewer
+        v-if="msg.context"
+        :context="msg.context"
+        @focus-evidence="$emit('focus-evidence', { messageId: msg.id, evidence: $event })"
+      />
     </div>
     <div class="msg-time">{{ formatTime(msg.timestamp) }}</div>
   </div>
@@ -16,7 +20,7 @@ defineProps({
   active: { type: Boolean, default: false }
 })
 
-defineEmits(['select'])
+defineEmits(['select', 'focus-evidence'])
 
 function formatTime(ts) {
   const d = new Date(ts)
