@@ -25,7 +25,11 @@
       </div>
 
       <div class="progress-track">
-        <div class="progress-bar" :class="{ error: Boolean(importStore.parseError) }" :style="{ width: `${progressPercent}%` }"></div>
+        <div
+          class="progress-bar"
+          :class="{ error: Boolean(importStore.parseError) }"
+          :style="{ width: `${progressPercent}%` }"
+        ></div>
       </div>
 
       <div v-if="activeStageDetail" class="progress-detail">{{ activeStageDetail }}</div>
@@ -41,19 +45,31 @@
             <div class="task-item-name">{{ item.fileName }}</div>
             <div class="task-item-state">{{ formatTaskState(item) }}</div>
           </div>
+
           <div class="task-item-track">
             <div class="task-item-bar" :style="{ width: `${getTaskProgress(item)}%` }"></div>
           </div>
+
+          <div class="task-item-stage-copy">
+            <div class="task-item-stage-title">{{ getCurrentTaskStageLabel(item) }}</div>
+            <div v-if="getCurrentTaskStageDetail(item)" class="task-item-stage-detail">
+              {{ getCurrentTaskStageDetail(item) }}
+            </div>
+          </div>
+
           <div v-if="item.stages?.length" class="task-item-stages">
-            <span
+            <div
               v-for="stage in item.stages"
               :key="`${item.id}-${stage.key}`"
-              class="task-stage-dot"
+              class="task-stage-chip"
               :class="`task-stage-${stage.status}`"
-            ></span>
+            >
+              {{ formatStageLabel(stage.key) }}
+            </div>
           </div>
+
           <div v-if="item.summary" class="task-item-meta">
-            {{ item.summary.method }} · {{ item.summary.nodeCount }} 节点 · {{ item.summary.edgeCount }} 关系
+            {{ formatMethod(item.summary.method) }} · {{ item.summary.nodeCount }} 节点 · {{ item.summary.edgeCount }} 关系
           </div>
           <div v-else-if="item.error" class="task-item-error">{{ item.error }}</div>
         </div>
@@ -65,18 +81,24 @@
           <strong>{{ importStore.currentFileName || '未开始' }}</strong>
         </div>
         <div class="summary-line">
-          <span>方式</span>
-          <strong>{{ importStore.extractionSummary.method }}</strong>
+          <span>抽取方式</span>
+          <strong>{{ formatMethod(importStore.extractionSummary.method) }}</strong>
         </div>
         <div class="summary-line">
-          <span>结果</span>
+          <span>抽取结果</span>
           <strong>{{ importStore.extractionSummary.nodeCount }} 节点 · {{ importStore.extractionSummary.edgeCount }} 关系</strong>
         </div>
         <div v-if="importStore.extractionSummary.entityLabels.length" class="summary-tags">
           <span v-for="label in importStore.extractionSummary.entityLabels" :key="label" class="summary-tag">{{ label }}</span>
         </div>
         <div v-if="importStore.extractionSummary.eventLabels.length" class="summary-tags">
-          <span v-for="label in importStore.extractionSummary.eventLabels" :key="label" class="summary-tag summary-tag-event">{{ label }}</span>
+          <span
+            v-for="label in importStore.extractionSummary.eventLabels"
+            :key="label"
+            class="summary-tag summary-tag-event"
+          >
+            {{ label }}
+          </span>
         </div>
       </div>
 
@@ -121,6 +143,14 @@ const importStore = useImportStore()
 const workspaceFiles = ref([])
 const filesLoading = ref(false)
 
+const STAGE_LABELS = {
+  receive: '接收',
+  parse: '解析',
+  extract: '抽取',
+  persist: '更新图谱',
+  complete: '完成'
+}
+
 const taskItems = computed(() => importStore.jobItems || [])
 
 const progressPercent = computed(() => {
@@ -142,18 +172,25 @@ const progressPercent = computed(() => {
 
 const progressLabel = computed(() => {
   if (importStore.parseError) return '处理失败'
-  if (importStore.totalCount) {
-    if (importStore.completedCount + importStore.failedCount === importStore.totalCount) {
-      return importStore.failedCount > 0
-        ? `完成 ${importStore.completedCount}/${importStore.totalCount}，失败 ${importStore.failedCount}`
-        : `已完成 ${importStore.totalCount} 个文件`
-    }
-    return `已完成 ${importStore.completedCount}/${importStore.totalCount}`
+  if (!importStore.totalCount) {
+    const running = importStore.currentStage
+    return running ? `正在${running.label}` : '等待处理'
   }
 
-  const running = importStore.currentStage
-  if (running) return `正在${running.label}`
-  return '等待处理'
+  const finished = importStore.completedCount + importStore.failedCount
+  if (finished === importStore.totalCount) {
+    if (importStore.failedCount > 0) {
+      return `已完成 ${importStore.completedCount}/${importStore.totalCount}，失败 ${importStore.failedCount}`
+    }
+    return `已完成 ${importStore.totalCount} 个文件`
+  }
+
+  const runningItem = taskItems.value.find(item => item.status === 'running')
+  if (runningItem) {
+    return `正在处理 ${runningItem.fileName} · 已完成 ${importStore.completedCount}/${importStore.totalCount}`
+  }
+
+  return `已完成 ${importStore.completedCount}/${importStore.totalCount}`
 })
 
 const activeStageDetail = computed(() => {
@@ -170,7 +207,27 @@ const importSummary = computed(() => {
   return importStore.currentFileName || '等待文件'
 })
 
-watch(() => graphStore.currentGraphId, refreshFiles, { immediate: true })
+watch(
+  () => graphStore.currentGraphId,
+  () => {
+    void refreshFiles()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => [graphStore.currentGraphId, importStore.completedCount, importStore.failedCount],
+  async ([graphId]) => {
+    if (!graphId) return
+    await refreshFiles()
+    graphStore.syncCurrentGraphMeta({
+      fileCount: workspaceFiles.value.length,
+      nodeCount: graphStore.nodeCount,
+      edgeCount: graphStore.edgeCount,
+      updatedAt: Date.now()
+    })
+  }
+)
 
 async function onFilesSelected(files) {
   const selectedFiles = Array.from(files || [])
@@ -178,7 +235,6 @@ async function onFilesSelected(files) {
 
   await importStore.importFiles(selectedFiles)
   if (!graphStore.currentGraphId) return
-  await graphStore.loadGraph(graphStore.currentGraphId)
   await refreshFiles()
   graphStore.syncCurrentGraphMeta({
     fileCount: workspaceFiles.value.length,
@@ -251,8 +307,38 @@ function getTaskProgress(item) {
 function formatTaskState(item) {
   if (item.status === 'done') return '完成'
   if (item.status === 'error') return '失败'
-  if (item.status === 'running') return `${getTaskProgress(item)}%`
-  return '排队中'
+  if (item.status === 'queued') return '排队中'
+  return `${getTaskProgress(item)}%`
+}
+
+function formatStageLabel(stageKey) {
+  return STAGE_LABELS[stageKey] || stageKey
+}
+
+function getCurrentTaskStage(item) {
+  return (
+    item?.stages?.find(stage => stage.status === 'running') ||
+    [...(item?.stages || [])].reverse().find(stage => stage.status === 'done') ||
+    null
+  )
+}
+
+function getCurrentTaskStageLabel(item) {
+  const stage = getCurrentTaskStage(item)
+  if (!stage) return '等待处理'
+  return `${formatStageLabel(stage.key)} · ${formatTaskState(item)}`
+}
+
+function getCurrentTaskStageDetail(item) {
+  return getCurrentTaskStage(item)?.detail || ''
+}
+
+function formatMethod(method) {
+  if (method === 'server-llm') return '模型抽取'
+  if (method === 'structured-precomputed') return '结构化导入'
+  if (method === 'fallback-rule') return '规则回退'
+  if (method === 'empty-content') return '空内容'
+  return method || '未知'
 }
 </script>
 
@@ -436,30 +522,51 @@ function formatTaskState(item) {
   background: linear-gradient(90deg, #ef4444, #f97316);
 }
 
+.task-item-stage-copy {
+  margin-top: 8px;
+}
+
+.task-item-stage-title {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.task-item-stage-detail {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
 .task-item-stages {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
 }
 
-.task-stage-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: rgba(148, 163, 184, 0.5);
+.task-stage-chip {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--color-text-secondary);
 }
 
 .task-stage-running {
-  background: var(--color-primary);
+  background: rgba(79, 109, 245, 0.14);
+  color: var(--color-primary);
 }
 
 .task-stage-done,
 .task-stage-ready {
-  background: #16a34a;
+  background: rgba(34, 197, 94, 0.14);
+  color: #15803d;
 }
 
 .task-stage-error {
-  background: var(--color-danger);
+  background: rgba(239, 68, 68, 0.14);
+  color: var(--color-danger);
 }
 
 .task-item-meta,

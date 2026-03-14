@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useGraphStore } from './graphStore'
 import { useSettingsStore } from './settingsStore'
@@ -6,6 +6,8 @@ import { parseJSON } from '@/services/parsers/jsonParser'
 import { parseCSV } from '@/services/parsers/csvParser'
 import { createImportJobApi, fetchImportJobApi } from '@/services/apiClient'
 import { generateId } from '@/utils/idGenerator'
+
+const IMPORT_JOB_STORAGE_KEY = 'zstp-active-import-jobs'
 
 const DEFAULT_STAGES = [
   { key: 'receive', label: '文件接收', status: 'idle', detail: '' },
@@ -21,6 +23,27 @@ function cloneStages() {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function loadPersistedJobs() {
+  try {
+    return JSON.parse(localStorage.getItem(IMPORT_JOB_STORAGE_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function persistJobForWorkspace(workspaceId, jobId) {
+  if (!workspaceId) return
+  const map = loadPersistedJobs()
+  if (jobId) map[workspaceId] = jobId
+  else delete map[workspaceId]
+  localStorage.setItem(IMPORT_JOB_STORAGE_KEY, JSON.stringify(map))
+}
+
+function getPersistedJobId(workspaceId) {
+  if (!workspaceId) return null
+  return loadPersistedJobs()[workspaceId] || null
 }
 
 export const useImportStore = defineStore('import', () => {
@@ -46,6 +69,8 @@ export const useImportStore = defineStore('import', () => {
   const completedCount = computed(() => Number(jobSnapshot.value?.completedFiles || 0))
   const failedCount = computed(() => Number(jobSnapshot.value?.failedFiles || 0))
   const totalCount = computed(() => Number(jobSnapshot.value?.totalFiles || 0))
+  const activeJobStatus = computed(() => jobSnapshot.value?.status || '')
+
   const overallProgress = computed(() => {
     if (!totalCount.value) return 0
     let units = completedCount.value + failedCount.value
@@ -59,7 +84,7 @@ export const useImportStore = defineStore('import', () => {
   })
 
   const hasActivity = computed(() =>
-    Boolean(activeJobId.value || currentFileName.value || parseError.value || processLogs.value.length)
+    Boolean(activeJobId.value || currentFileName.value || parseError.value || processLogs.value.length || jobSnapshot.value)
   )
 
   function getExt(fileName) {
@@ -87,6 +112,7 @@ export const useImportStore = defineStore('import', () => {
     extractionSummary.value = null
     activeJobId.value = null
     jobSnapshot.value = null
+    persistJobForWorkspace(graphStore.currentGraphId, null)
   }
 
   async function extractPdfText(arrayBuffer) {
@@ -134,11 +160,8 @@ export const useImportStore = defineStore('import', () => {
     }
 
     let precomputedGraph = null
-    if (ext === 'json') {
-      precomputedGraph = parseJSON(content)
-    } else if (ext === 'csv') {
-      precomputedGraph = parseCSV(content)
-    }
+    if (ext === 'json') precomputedGraph = parseJSON(content)
+    else if (ext === 'csv') precomputedGraph = parseCSV(content)
 
     return {
       id: generateId('f'),
@@ -174,20 +197,90 @@ export const useImportStore = defineStore('import', () => {
     extracting.value = Boolean(item?.stages?.find(stage => stage.key === 'extract' && stage.status === 'running'))
   }
 
+  async function refreshWorkspaceGraph() {
+    const graphId = graphStore.currentGraphId
+    if (!graphId) return
+    try {
+      await graphStore.loadGraph(graphId)
+      await graphStore.refreshGraphList()
+    } catch (error) {
+      console.warn('[importStore] failed to refresh workspace graph:', error.message)
+    }
+  }
+
+  async function finalizeJob(jobId, snapshot) {
+    if (activeJobId.value === jobId) activeJobId.value = null
+    persistJobForWorkspace(graphStore.currentGraphId, null)
+    lastResult.value = snapshot
+    extracting.value = false
+    parsing.value = false
+    await refreshWorkspaceGraph()
+  }
+
   async function waitForJob(jobId) {
+    let previousCompleted = -1
+    let previousFailed = -1
+
     while (activeJobId.value === jobId) {
       const snapshot = await fetchImportJobApi(jobId)
       applyJobSnapshot(snapshot)
 
+      if (
+        snapshot.completedFiles !== previousCompleted ||
+        snapshot.failedFiles !== previousFailed
+      ) {
+        previousCompleted = snapshot.completedFiles
+        previousFailed = snapshot.failedFiles
+        await refreshWorkspaceGraph()
+      }
+
       if (['completed', 'completed-with-errors', 'failed'].includes(snapshot.status)) {
+        await finalizeJob(jobId, snapshot)
         return snapshot
       }
+
       await sleep(1200)
     }
     return null
   }
 
-  async function importFiles(files, options = {}) {
+  async function restorePersistedJob(workspaceId) {
+    if (!workspaceId) {
+      clearProcess()
+      return
+    }
+
+    const persistedJobId = getPersistedJobId(workspaceId)
+    if (!persistedJobId) {
+      if (!activeJobId.value) {
+        currentFileName.value = ''
+        stages.value = cloneStages()
+        processLogs.value = []
+        extractionSummary.value = null
+        parseError.value = null
+        jobSnapshot.value = null
+      }
+      return
+    }
+
+    try {
+      const snapshot = await fetchImportJobApi(persistedJobId)
+      applyJobSnapshot(snapshot)
+
+      if (['completed', 'completed-with-errors', 'failed'].includes(snapshot.status)) {
+        await finalizeJob(persistedJobId, snapshot)
+        return
+      }
+
+      activeJobId.value = persistedJobId
+      void waitForJob(persistedJobId)
+    } catch (error) {
+      console.warn('[importStore] failed to restore import job:', error.message)
+      persistJobForWorkspace(workspaceId, null)
+    }
+  }
+
+  async function importFiles(files) {
     if (!graphStore.currentGraphId || !graphStore.currentIntentQuery) {
       throw new Error('请先创建工作区并填写总意图后再导入文件。')
     }
@@ -216,10 +309,10 @@ export const useImportStore = defineStore('import', () => {
     })
 
     activeJobId.value = job.id
+    persistJobForWorkspace(graphStore.currentGraphId, job.id)
     applyJobSnapshot(job)
-    const completedJob = await waitForJob(job.id)
-    extracting.value = false
 
+    const completedJob = await waitForJob(job.id)
     const imported = (completedJob?.items || [])
       .filter(item => item.status === 'done')
       .map(item => ({
@@ -237,13 +330,21 @@ export const useImportStore = defineStore('import', () => {
         message: item.error || '导入失败'
       }))
 
-    lastResult.value = completedJob
     return { imported, errors }
   }
 
   function cancelImport() {
     activeJobId.value = null
+    persistJobForWorkspace(graphStore.currentGraphId, null)
   }
+
+  watch(
+    () => graphStore.currentGraphId,
+    graphId => {
+      void restorePersistedJob(graphId)
+    },
+    { immediate: true }
+  )
 
   return {
     parsing,
@@ -256,6 +357,7 @@ export const useImportStore = defineStore('import', () => {
     completedCount,
     failedCount,
     totalCount,
+    activeJobStatus,
     overallProgress,
     stages,
     processLogs,
@@ -265,6 +367,7 @@ export const useImportStore = defineStore('import', () => {
     jobSnapshot,
     importFiles,
     cancelImport,
-    clearProcess
+    clearProcess,
+    refreshWorkspaceGraph
   }
 })
