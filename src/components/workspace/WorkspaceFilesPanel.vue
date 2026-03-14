@@ -69,8 +69,6 @@
 
     <div v-if="importStore.parseError" class="status-card status-error">{{ importStore.parseError }}</div>
 
-    <ImportPreview :result="importStore.lastResult" @confirm="confirmAndRefresh" @cancel="importStore.cancelImport" />
-
     <div class="file-list-card">
       <div class="file-list-title">已上传文件</div>
       <div v-if="filesLoading" class="file-list-empty">正在加载文件...</div>
@@ -96,7 +94,6 @@ import { deleteFileApi, fetchFiles } from '@/services/apiClient'
 import { useGraphStore } from '@/stores/graphStore'
 import { useImportStore } from '@/stores/importStore'
 import FileImporter from '@/components/import/FileImporter.vue'
-import ImportPreview from '@/components/import/ImportPreview.vue'
 
 const graphStore = useGraphStore()
 const importStore = useImportStore()
@@ -157,25 +154,21 @@ async function onFilesSelected(files) {
   const selectedFiles = Array.from(files || [])
   if (selectedFiles.length === 0) return
 
-  if (selectedFiles.length === 1) {
-    try {
-      await importStore.parseFile(selectedFiles[0])
-    } catch {
-      // parseError already captures the user-visible message.
+  await importStore.importFiles(selectedFiles, {
+    autoConfirm: true,
+    onImported: async () => {
+      if (!graphStore.currentGraphId) return
+      await refreshFiles()
+      graphStore.syncCurrentGraphMeta({
+        fileCount: workspaceFiles.value.length,
+        nodeCount: graphStore.nodeCount,
+        edgeCount: graphStore.edgeCount,
+        updatedAt: Date.now()
+      })
+      await graphStore.loadGraph(graphStore.currentGraphId)
+      await graphStore.refreshGraphList()
     }
-    return
-  }
-
-  await importStore.importFiles(selectedFiles, { autoConfirm: true })
-  await refreshFiles()
-  if (graphStore.currentGraphId) {
-    await graphStore.loadGraph(graphStore.currentGraphId)
-  }
-}
-
-async function confirmAndRefresh() {
-  await importStore.confirmImport()
-  await refreshFiles()
+  })
 }
 
 async function refreshFiles() {
@@ -199,6 +192,13 @@ async function removeFile(file) {
   await deleteFileApi(graphStore.currentGraphId, file.id)
   await graphStore.loadGraph(graphStore.currentGraphId)
   await refreshFiles()
+  graphStore.syncCurrentGraphMeta({
+    fileCount: workspaceFiles.value.length,
+    nodeCount: graphStore.nodeCount,
+    edgeCount: graphStore.edgeCount,
+    updatedAt: Date.now()
+  })
+  await graphStore.refreshGraphList()
 }
 
 function formatTime(ts) {
@@ -222,7 +222,10 @@ function formatFileSize(size) {
 .files-panel {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   gap: 14px;
+  overflow: hidden;
 }
 
 .panel-header {
@@ -253,6 +256,13 @@ function formatFileSize(size) {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.file-list-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .process-head {
@@ -462,6 +472,9 @@ function formatFileSize(size) {
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .file-row {

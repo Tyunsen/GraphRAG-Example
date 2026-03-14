@@ -48,8 +48,40 @@ async function rebuildGraphDb(graphId) {
   await syncWorkspaceGraph(workspace, nodes, edges)
 }
 
+function clearWorkspaceGraphData(graphId) {
+  run('DELETE FROM nodes WHERE graphId = ?', [graphId])
+  run('DELETE FROM edges WHERE graphId = ?', [graphId])
+  run('DELETE FROM import_history WHERE graphId = ?', [graphId])
+  run(
+    'UPDATE graphs SET nodeCount = 0, edgeCount = 0, updatedAt = ? WHERE id = ?',
+    [Date.now(), graphId]
+  )
+}
+
+function reconcileWorkspaceSourceState(graphId) {
+  const fileCountRow = getRow('SELECT COUNT(*) as count FROM files WHERE graphId = ?', [graphId])
+  const fileCount = Number(fileCountRow?.count || 0)
+  if (fileCount > 0) return false
+
+  const nodeCountRow = getRow('SELECT COUNT(*) as count FROM nodes WHERE graphId = ?', [graphId])
+  const edgeCountRow = getRow('SELECT COUNT(*) as count FROM edges WHERE graphId = ?', [graphId])
+  const nodeCount = Number(nodeCountRow?.count || 0)
+  const edgeCount = Number(edgeCountRow?.count || 0)
+
+  if (nodeCount === 0 && edgeCount === 0) return false
+  clearWorkspaceGraphData(graphId)
+  return true
+}
+
 router.get('/', (req, res) => {
   try {
+    const graphIds = allRows('SELECT id FROM graphs').map(item => item.id)
+    let hasReconciled = false
+    for (const graphId of graphIds) {
+      hasReconciled = reconcileWorkspaceSourceState(graphId) || hasReconciled
+    }
+    if (hasReconciled) saveToDisk()
+
     const graphs = allRows(`
       SELECT
         g.*,
@@ -85,14 +117,8 @@ router.post('/', (req, res) => {
       [id, name.trim(), intentQuery.trim(), intentSummary.trim(), now, now]
     )
 
-    const sessionId = `s_${Math.random().toString(36).slice(2, 10)}`
-    run(
-      'INSERT INTO sessions (id, graphId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)',
-      [sessionId, id, '默认会话', now, now]
-    )
-
     saveToDisk()
-    res.json({ success: true, id, defaultSessionId: sessionId })
+    res.json({ success: true, id })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -100,8 +126,13 @@ router.post('/', (req, res) => {
 
 router.get('/:id', (req, res) => {
   try {
-    const graph = getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id])
+    let graph = getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id])
     if (!graph) return res.status(404).json({ error: 'Workspace not found' })
+
+    if (reconcileWorkspaceSourceState(req.params.id)) {
+      saveToDisk()
+      graph = getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id])
+    }
 
     const nodes = allRows('SELECT * FROM nodes WHERE graphId = ?', [req.params.id]).map(n => ({
       ...n,

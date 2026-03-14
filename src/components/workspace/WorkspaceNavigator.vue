@@ -8,9 +8,6 @@
       <div class="workspace-nav-header">
         <div class="workspace-nav-kicker">当前工作区</div>
         <div class="workspace-nav-title">{{ graphStore.currentGraphMeta.name }}</div>
-        <div v-if="graphStore.currentGraphMeta.intentQuery" class="workspace-nav-intent">
-          {{ graphStore.currentGraphMeta.intentQuery }}
-        </div>
       </div>
 
       <div class="workspace-nav-tabs">
@@ -95,7 +92,7 @@ watch(
 
 function displaySessionTitle(title) {
   const value = title?.trim()
-  if (!value || value === '默认会话' || value === '新会话') return '开始对话'
+  if (!value || value === '默认会话' || value === '新会话' || value === '开始对话') return '未命名对话'
   return value
 }
 
@@ -143,17 +140,6 @@ async function removeSession(sessionId) {
   margin-top: 4px;
   font-size: 18px;
   font-weight: 700;
-}
-
-.workspace-nav-intent {
-  margin-top: 6px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--color-text-secondary);
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .workspace-nav-tabs {
@@ -215,7 +201,7 @@ async function removeSession(sessionId) {
 .session-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   overflow-y: auto;
 }
 
@@ -223,27 +209,34 @@ async function removeSession(sessionId) {
   display: flex;
   align-items: center;
   gap: 8px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.84);
+  min-height: 42px;
+  border-radius: 10px;
+  background: transparent;
   border: 1px solid transparent;
-  padding: 4px;
+  padding: 2px;
+  box-shadow: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .session-item:hover {
-  background: rgba(255, 255, 255, 0.98);
-  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(148, 163, 184, 0.16);
 }
 
 .session-item.active {
   background: rgba(79, 109, 245, 0.08);
-  border-color: rgba(79, 109, 245, 0.28);
+  border-color: rgba(79, 109, 245, 0.22);
 }
 
 .session-main {
   flex: 1;
+  display: flex;
+  align-items: center;
   min-width: 0;
   text-align: left;
-  padding: 8px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
   color: var(--color-text);
 }
 
@@ -251,6 +244,7 @@ async function removeSession(sessionId) {
   display: block;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -258,11 +252,24 @@ async function removeSession(sessionId) {
 
 .session-delete {
   flex-shrink: 0;
-  padding: 6px 8px;
+  align-self: stretch;
+  padding: 0 8px;
   border-radius: 8px;
-  background: rgba(254, 242, 242, 0.92);
-  color: var(--color-danger);
+  background: transparent;
+  color: rgba(220, 38, 38, 0.78);
   font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.session-item:hover .session-delete,
+.session-item.active .session-delete {
+  opacity: 0.9;
+}
+
+.session-delete:hover {
+  background: rgba(254, 242, 242, 0.88);
+  color: var(--color-danger);
 }
 
 .file-summary-list {

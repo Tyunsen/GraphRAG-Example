@@ -1,12 +1,16 @@
 import neo4j from 'neo4j-driver'
 
-const NEO4J_URI = process.env.NEO4J_URI || ''
-const NEO4J_USERNAME = process.env.NEO4J_USERNAME || 'neo4j'
-const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD || ''
-const NEO4J_DATABASE = process.env.NEO4J_DATABASE || 'neo4j'
-
 let driver = null
 let graphDbEnabled = false
+
+function getGraphConfig() {
+  return {
+    uri: process.env.NEO4J_URI || '',
+    username: process.env.NEO4J_USERNAME || 'neo4j',
+    password: process.env.NEO4J_PASSWORD || '',
+    database: process.env.NEO4J_DATABASE || 'neo4j'
+  }
+}
 
 function normalizeType(type = 'default') {
   const raw = String(type).trim().toLowerCase()
@@ -47,14 +51,16 @@ function toEdgePayload(rel) {
 }
 
 export async function initGraphDB() {
-  if (!NEO4J_URI || !NEO4J_PASSWORD) {
+  const config = getGraphConfig()
+
+  if (!config.uri || !config.password) {
     graphDbEnabled = false
     return false
   }
 
   driver = neo4j.driver(
-    NEO4J_URI,
-    neo4j.auth.basic(NEO4J_USERNAME, NEO4J_PASSWORD)
+    config.uri,
+    neo4j.auth.basic(config.username, config.password)
   )
 
   try {
@@ -75,7 +81,8 @@ export function isGraphDBEnabled() {
 export async function syncWorkspaceGraph(workspace, nodes = [], edges = []) {
   if (!graphDbEnabled || !driver || !workspace?.id) return
 
-  const session = driver.session({ database: NEO4J_DATABASE })
+  const { database } = getGraphConfig()
+  const session = driver.session({ database })
   const payloadNodes = nodes.map(node => ({
     id: node.id,
     label: node.label,
@@ -187,7 +194,8 @@ export async function queryWorkspaceSubgraph(workspaceId, labels = [], options =
   const pathLimit = Math.max(20, Number(options.pathLimit || 200))
   const loweredLabels = labels.map(label => String(label || '').trim()).filter(Boolean)
 
-  const session = driver.session({ database: NEO4J_DATABASE })
+  const { database } = getGraphConfig()
+  const session = driver.session({ database })
   try {
     const seedResult = await session.executeRead(tx => tx.run(
       `
@@ -267,7 +275,8 @@ export async function queryWorkspaceSubgraph(workspaceId, labels = [], options =
 
 export async function deleteWorkspaceGraph(workspaceId) {
   if (!graphDbEnabled || !driver || !workspaceId) return
-  const session = driver.session({ database: NEO4J_DATABASE })
+  const { database } = getGraphConfig()
+  const session = driver.session({ database })
   try {
     await session.executeWrite(async tx => {
       await tx.run(

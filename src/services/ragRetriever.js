@@ -1,9 +1,21 @@
 import { extractKeywords } from '@/utils/textTokenizer'
 import { findSeedNodes } from './graphService'
 import { fetchWorkspaceContext, searchFiles } from './apiClient'
+import { filterDisplayableLabels, isDisplayableGraphLabel, isDisplayableRelationLabel } from '@/utils/graphLabelFilter'
 
 function dedupe(values) {
   return [...new Set(values.filter(Boolean))]
+}
+
+function getVisibleSubgraph(subgraph) {
+  const nodes = (subgraph.nodes || []).filter(node => isDisplayableGraphLabel(node.label))
+  const visibleIds = new Set(nodes.map(node => node.id))
+  const edges = (subgraph.edges || []).filter(edge =>
+    visibleIds.has(edge.source) &&
+    visibleIds.has(edge.target) &&
+    isDisplayableRelationLabel(edge.label)
+  )
+  return { nodes, edges }
 }
 
 export async function retrieveContext(graphStore, query, settings) {
@@ -21,7 +33,10 @@ export async function retrieveContext(graphStore, query, settings) {
   }
 
   const evidenceLabels = dedupe(
-    evidence.flatMap(item => [...(item.linkedNodes || []), ...(item.linkedEvents || [])])
+    evidence.flatMap(item => [
+      ...filterDisplayableLabels(item.linkedNodes || []),
+      ...filterDisplayableLabels(item.linkedEvents || [])
+    ])
   )
 
   let subgraph = { nodes: [], edges: [] }
@@ -39,7 +54,9 @@ export async function retrieveContext(graphStore, query, settings) {
         nodes: serverGraph.nodes || [],
         edges: serverGraph.edges || []
       }
-      seedIds = (serverGraph.nodes || []).map(node => node.id)
+      seedIds = (serverGraph.nodes || [])
+        .filter(node => isDisplayableGraphLabel(node.label))
+        .map(node => node.id)
     } catch (error) {
       console.warn('[ragRetriever] graphdb context failed, fallback to local BFS:', error.message)
     }
@@ -52,15 +69,16 @@ export async function retrieveContext(graphStore, query, settings) {
     }
   }
 
-  if (evidence.length === 0 && subgraph.nodes.length === 0) return null
+  const visibleSubgraph = getVisibleSubgraph(subgraph)
+  if (evidence.length === 0 && visibleSubgraph.nodes.length === 0) return null
 
   return {
-    text: formatEvidenceContext(evidence, subgraph),
+    text: formatEvidenceContext(evidence, visibleSubgraph),
     keywords,
     seedIds,
-    subgraph,
+    subgraph: visibleSubgraph,
     evidence,
-    nodeIds: subgraph.nodes.map(node => node.id)
+    nodeIds: visibleSubgraph.nodes.map(node => node.id)
   }
 }
 
@@ -68,11 +86,13 @@ function formatEvidenceContext(evidence, subgraph) {
   const lines = ['=== 证据段落（优先依据）===']
 
   for (const item of evidence) {
+    const linkedNodes = filterDisplayableLabels(item.linkedNodes || [])
+    const linkedEvents = filterDisplayableLabels(item.linkedEvents || [])
     lines.push('')
     lines.push(`【${item.fileName} 第${item.paragraphIndex}段】`)
     lines.push(item.text.trim())
-    lines.push(`涉及实体: ${(item.linkedNodes || []).join('、') || '无'}`)
-    lines.push(`涉及事件: ${(item.linkedEvents || []).join('、') || '无'}`)
+    lines.push(`涉及实体: ${linkedNodes.join('、') || '无'}`)
+    lines.push(`涉及事件: ${linkedEvents.join('、') || '无'}`)
   }
 
   if (subgraph.nodes.length > 0) {

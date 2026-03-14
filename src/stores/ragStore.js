@@ -28,6 +28,14 @@ function persistStoredSession(workspaceId, sessionId) {
   localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(map))
 }
 
+function clearStoredSession(workspaceId) {
+  const map = loadStoredSessions()
+  if (workspaceId && workspaceId in map) {
+    delete map[workspaceId]
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(map))
+  }
+}
+
 export const useRagStore = defineStore('rag', () => {
   const graphStore = useGraphStore()
 
@@ -101,22 +109,18 @@ export const useRagStore = defineStore('rag', () => {
     )
   }
 
-  async function ensureDefaultSession(graphId) {
+  async function loadSessionsForWorkspace(graphId) {
     if (!graphId) {
       sessions.value = []
       currentSessionId.value = null
       messages.value = []
+      clearStoredSession(graphId)
       resetGraphView()
       return
     }
 
     try {
       sessions.value = await fetchSessions(graphId)
-      if (sessions.value.length === 0) {
-        const id = generateId('s')
-        await createSessionApi(graphId, { id, title: '默认会话' })
-        sessions.value = await fetchSessions(graphId)
-      }
 
       const stored = loadStoredSessions()[graphId]
       currentSessionId.value = sessions.value.some(item => item.id === stored)
@@ -124,6 +128,8 @@ export const useRagStore = defineStore('rag', () => {
         : sessions.value[0]?.id || null
 
       if (currentSessionId.value) persistStoredSession(graphId, currentSessionId.value)
+      else clearStoredSession(graphId)
+
       await loadMessagesForSession(currentSessionId.value)
     } catch (error) {
       console.warn('[ragStore] failed to load sessions:', error.message)
@@ -134,9 +140,9 @@ export const useRagStore = defineStore('rag', () => {
     }
   }
 
-  async function createSession(title = '新会话') {
+  async function createSession(title = '新对话') {
     const graphId = graphStore.currentGraphId
-    if (!graphId) return
+    if (!graphId) return null
 
     const id = generateId('s')
     await createSessionApi(graphId, { id, title })
@@ -146,6 +152,12 @@ export const useRagStore = defineStore('rag', () => {
     messages.value = []
     lastContext.value = null
     resetGraphView()
+    return id
+  }
+
+  async function ensureActiveSession() {
+    if (currentSessionId.value) return currentSessionId.value
+    return createSession('新对话')
   }
 
   async function switchSession(sessionId) {
@@ -169,22 +181,20 @@ export const useRagStore = defineStore('rag', () => {
     await deleteSessionApi(sessionId)
     sessions.value = sessions.value.filter(item => item.id !== sessionId)
 
-    if (sessions.value.length === 0 && graphId) {
-      await createSession('新会话')
-      return
-    }
-
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = sessions.value[0]?.id || null
-      persistStoredSession(graphId, currentSessionId.value)
+      if (currentSessionId.value) persistStoredSession(graphId, currentSessionId.value)
+      else clearStoredSession(graphId)
       await loadMessagesForSession(currentSessionId.value)
     }
   }
 
   async function addMessage(role, content, context = null) {
     const graphId = graphStore.currentGraphId
-    const sessionId = currentSessionId.value
-    if (!graphId || !sessionId) return null
+    if (!graphId) return null
+
+    const sessionId = await ensureActiveSession()
+    if (!sessionId) return null
 
     const msg = {
       id: generateId('m'),
@@ -226,7 +236,7 @@ export const useRagStore = defineStore('rag', () => {
     }
   }
 
-  watch(() => graphStore.currentGraphId, ensureDefaultSession, { immediate: true })
+  watch(() => graphStore.currentGraphId, loadSessionsForWorkspace, { immediate: true })
 
   return {
     sessions,
@@ -237,6 +247,7 @@ export const useRagStore = defineStore('rag', () => {
     lastContext,
     activeMessageId,
     createSession,
+    ensureActiveSession,
     switchSession,
     renameSession,
     deleteSession,

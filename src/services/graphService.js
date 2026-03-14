@@ -1,25 +1,36 @@
 import { useGraphStore } from '@/stores/graphStore'
 import { normalizeLabel } from '@/utils/textTokenizer'
+import { isDisplayableGraphLabel, isDisplayableRelationLabel } from '@/utils/graphLabelFilter'
 
 /**
  * Get formatted subgraph data ready for D3 rendering
  */
 export function getD3Data(graphStore) {
-  const nodes = graphStore.nodeList.map(n => ({
+  const nodes = graphStore.nodeList
+    .filter(n => isDisplayableGraphLabel(n.label))
+    .map(n => ({
     id: n.id,
     label: n.label,
     type: n.type,
     degree: graphStore.getNodeDegree(n.id),
     highlighted: graphStore.highlightedNodes.has(n.id)
-  }))
+    }))
 
-  const edges = graphStore.edgeList.map(e => ({
+  const visibleIds = new Set(nodes.map(node => node.id))
+
+  const edges = graphStore.edgeList
+    .filter(e =>
+      visibleIds.has(e.source) &&
+      visibleIds.has(e.target) &&
+      isDisplayableRelationLabel(e.label)
+    )
+    .map(e => ({
     id: e.id,
     source: e.source,
     target: e.target,
     label: e.label,
     weight: e.weight
-  }))
+    }))
 
   return { nodes, edges }
 }
@@ -33,6 +44,7 @@ export function searchNodes(graphStore, keyword) {
   const results = []
 
   for (const node of graphStore.nodes.values()) {
+    if (!isDisplayableGraphLabel(node.label)) continue
     let score = 0
     const labelLower = node.label.toLowerCase()
 
@@ -61,6 +73,7 @@ export function findSeedNodes(graphStore, keywords, maxSeeds = 10) {
   for (const keyword of keywords) {
     const lower = keyword.toLowerCase()
     for (const node of graphStore.nodes.values()) {
+      if (!isDisplayableGraphLabel(node.label)) continue
       const labelLower = node.label.toLowerCase()
       let score = scored.get(node.id) || 0
 

@@ -1,7 +1,7 @@
 <template>
   <aside class="app-sidebar">
     <div class="sidebar-topbar">
-      <div class="sidebar-brand">Graph Workspace</div>
+      <div class="sidebar-brand">图谱工作台</div>
       <button class="sidebar-create" @click="graphListRef?.openCreatePanel()">新建</button>
     </div>
 
@@ -21,15 +21,31 @@
         <div class="settings-dialog" @click.stop>
           <div class="settings-dialog-header">
             <div>
-              <div class="settings-dialog-kicker">Settings</div>
-              <div class="settings-dialog-title">模型与抽取配置</div>
-              <div class="settings-dialog-subtitle">管理 API、模型参数和抽取策略。</div>
+              <div class="settings-dialog-kicker">系统设置</div>
+              <div class="settings-dialog-title">设置</div>
+              <div class="settings-dialog-subtitle">按模块管理模型、提示词和后续扩展配置。</div>
             </div>
             <button class="settings-close" @click="settingsOpen = false">关闭</button>
           </div>
 
           <div class="settings-dialog-body">
-            <ApiSettings />
+            <aside class="settings-menu">
+              <button
+                v-for="item in settingTabs"
+                :key="item.key"
+                class="settings-menu-item"
+                :class="{ active: activeSettingsTab === item.key }"
+                @click="activeSettingsTab = item.key"
+              >
+                <span class="settings-menu-title">{{ item.label }}</span>
+                <span class="settings-menu-desc">{{ item.desc }}</span>
+              </button>
+            </aside>
+
+            <section class="settings-content">
+              <ModelSettingsPanel v-if="activeSettingsTab === 'model'" />
+              <ExtractionSettingsPanel v-else />
+            </section>
           </div>
         </div>
       </div>
@@ -40,10 +56,17 @@
 <script setup>
 import { ref } from 'vue'
 import GraphList from '@/components/import/GraphList.vue'
-import ApiSettings from '@/components/rag/ApiSettings.vue'
+import ModelSettingsPanel from '@/components/settings/ModelSettingsPanel.vue'
+import ExtractionSettingsPanel from '@/components/settings/ExtractionSettingsPanel.vue'
 
 const settingsOpen = ref(false)
 const graphListRef = ref(null)
+const activeSettingsTab = ref('model')
+
+const settingTabs = [
+  { key: 'model', label: '模型', desc: '接口、模型参数、检索' },
+  { key: 'extraction', label: '抽取提示词', desc: '意图抽取与模板' }
+]
 </script>
 
 <style scoped>
@@ -130,7 +153,7 @@ const graphListRef = ref(null)
 }
 
 .settings-dialog {
-  width: min(980px, calc(100vw - 48px));
+  width: min(1120px, calc(100vw - 48px));
   height: min(860px, calc(100vh - 48px));
   display: flex;
   flex-direction: column;
@@ -181,6 +204,52 @@ const graphListRef = ref(null)
 
 .settings-dialog-body {
   flex: 1;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.settings-menu {
+  padding: 20px 16px;
+  border-right: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(248, 250, 252, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-menu-item {
+  text-align: left;
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.settings-menu-item:hover {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.settings-menu-item.active {
+  background: rgba(79, 109, 245, 0.08);
+  border-color: rgba(79, 109, 245, 0.24);
+}
+
+.settings-menu-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-menu-desc {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.settings-content {
   overflow-y: auto;
   padding: 24px 28px 28px;
 }

@@ -1,15 +1,11 @@
 <template>
   <div class="chat-panel">
-    <div class="chat-thread-header">
+    <div v-if="displayTitle" class="chat-thread-header">
       <div class="chat-thread-title">{{ displayTitle }}</div>
     </div>
 
-    <div class="chat-thread-card">
-      <div class="chat-messages" ref="messagesRef">
-        <div v-if="ragStore.messages.length === 0" class="chat-empty">
-          <p>开始提问。</p>
-        </div>
-
+    <div class="chat-thread-body">
+      <div class="chat-messages" :class="{ empty: ragStore.messages.length === 0 }" ref="messagesRef">
         <ChatMessage
           v-for="msg in ragStore.messages"
           :key="msg.id"
@@ -22,7 +18,9 @@
           <span class="loading-dots">检索与生成中...</span>
         </div>
       </div>
+    </div>
 
+    <div class="chat-input-shell">
       <div class="chat-input-area">
         <textarea
           ref="inputRef"
@@ -53,7 +51,7 @@ import { useRagStore } from '@/stores/ragStore'
 import { useRagQuery } from '@/composables/useRagQuery'
 import ChatMessage from './ChatMessage.vue'
 
-const PLACEHOLDER_TITLES = new Set(['默认会话', '新会话', '开始对话'])
+const PLACEHOLDER_TITLES = new Set(['默认会话', '新会话', '开始对话', '未命名对话'])
 
 const graphStore = useGraphStore()
 const ragStore = useRagStore()
@@ -65,7 +63,7 @@ const messagesRef = ref(null)
 
 const displayTitle = computed(() => {
   const title = ragStore.currentSession?.title?.trim()
-  if (!title || PLACEHOLDER_TITLES.has(title)) return '开始对话'
+  if (!title || PLACEHOLDER_TITLES.has(title)) return ''
   return title
 })
 
@@ -84,12 +82,16 @@ async function sendMessage() {
   await askQuestion(text)
 }
 
-watch(() => ragStore.messages.length, () => {
-  nextTick(() => {
-    if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-    resizeInput()
-  })
-}, { immediate: true })
+watch(
+  () => ragStore.messages.length,
+  () => {
+    nextTick(() => {
+      if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+      resizeInput()
+    })
+  },
+  { immediate: true }
+)
 
 watch(inputText, () => {
   nextTick(() => resizeInput())
@@ -99,16 +101,22 @@ watch(inputText, () => {
 <style scoped>
 .chat-panel {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 12px;
   min-height: 0;
   height: 100%;
+  width: 100%;
+  background: #fff;
+  border-radius: 0;
+  border: none;
+  overflow: hidden;
 }
 
 .chat-thread-header {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 20px 24px 8px;
 }
 
 .chat-thread-title {
@@ -117,29 +125,24 @@ watch(inputText, () => {
   line-height: 1.4;
 }
 
-.chat-thread-card {
+.chat-thread-body {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  overflow: hidden;
 }
 
 .chat-messages {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 22px 20px 18px;
+  padding: 20px 24px;
 }
 
-.chat-empty {
-  text-align: center;
-  padding: 64px 12px;
-  color: var(--color-text-muted);
-  font-size: 14px;
+.chat-messages.empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 .chat-loading {
@@ -157,13 +160,23 @@ watch(inputText, () => {
   50% { opacity: 0.4; }
 }
 
+.chat-input-shell {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 24px 20px;
+  background: rgba(255, 255, 255, 0.98);
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
 .chat-input-area {
   display: flex;
   align-items: flex-end;
   gap: 12px;
-  padding: 16px 18px 18px;
-  border-top: 1px solid var(--color-border-light);
-  background: rgba(255, 255, 255, 0.94);
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: #fff;
+  box-shadow: none;
 }
 
 .chat-input {
@@ -173,7 +186,9 @@ watch(inputText, () => {
   max-height: 180px;
   line-height: 1.6;
   overflow-y: auto;
-  border-radius: 16px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .send-btn {

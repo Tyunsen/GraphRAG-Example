@@ -302,6 +302,8 @@ export const useImportStore = defineStore('import', () => {
 
   async function importFiles(files, options = {}) {
     const autoConfirm = Boolean(options.autoConfirm)
+    const onImported = typeof options.onImported === 'function' ? options.onImported : null
+    const onError = typeof options.onError === 'function' ? options.onError : null
     const imported = []
     const errors = []
 
@@ -310,13 +312,22 @@ export const useImportStore = defineStore('import', () => {
         await parseFile(file)
         if (autoConfirm) {
           const result = await confirmImport()
-          if (result) imported.push(result)
+          if (result) {
+            imported.push(result)
+            if (onImported) {
+              await onImported(result)
+            }
+          }
         }
       } catch (error) {
-        errors.push({
+        const nextError = {
           fileName: file?.name || '',
           message: error.message
-        })
+        }
+        errors.push(nextError)
+        if (onError) {
+          await onError(nextError)
+        }
       }
     }
 

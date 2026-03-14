@@ -2,7 +2,7 @@
   <header class="app-header">
     <div class="header-left">
       <h1 class="header-title">
-        <router-link to="/">Graph Workspace</router-link>
+        <router-link to="/">图谱工作台</router-link>
       </h1>
       <div class="header-meta">
         <span class="header-workspace" v-if="graphStore.currentGraphName">{{ graphStore.currentGraphName }}</span>

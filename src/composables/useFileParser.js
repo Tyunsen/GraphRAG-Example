@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useGraphStore } from '@/stores/graphStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { parseJSON } from '@/services/parsers/jsonParser'
@@ -10,26 +10,89 @@ import { extractWithLLM } from '@/services/llmExtractor'
 import { saveFileContent } from '@/services/apiClient'
 import { generateId } from '@/utils/idGenerator'
 
+const DEFAULT_STAGES = [
+  { key: 'receive', label: '文件接收', status: 'idle', detail: '' },
+  { key: 'parse', label: '文本解析', status: 'idle', detail: '' },
+  { key: 'extract', label: '意图抽取', status: 'idle', detail: '' },
+  { key: 'structure', label: '实体关系整理', status: 'idle', detail: '' },
+  { key: 'persist', label: '导入图谱', status: 'idle', detail: '' }
+]
+
+function cloneStages() {
+  return DEFAULT_STAGES.map(item => ({ ...item }))
+}
+
 export function useFileParser() {
   const graphStore = useGraphStore()
   const settings = useSettingsStore()
+
   const parsing = ref(false)
   const extracting = ref(false)
   const parseError = ref(null)
   const lastResult = ref(null)
 
+  const currentFileName = ref('')
+  const stages = ref(cloneStages())
+  const processLogs = ref([])
+  const extractionSummary = ref(null)
+
+  const currentStage = computed(() =>
+    stages.value.find(item => item.status === 'running') || null
+  )
+
   function getExt(fileName) {
     return fileName.split('.').pop().toLowerCase()
   }
 
-  /** Check if this file type should use LLM extraction */
   function isUnstructuredType(ext) {
     return ['txt', 'md', 'markdown', 'pdf'].includes(ext)
   }
 
-  /** Check if LLM extraction is available */
   function canUseLLM() {
     return settings.useLLMExtraction && settings.isApiConfigured
+  }
+
+  function resetProcess(fileName = '') {
+    currentFileName.value = fileName
+    stages.value = cloneStages()
+    processLogs.value = []
+    extractionSummary.value = null
+  }
+
+  function updateStage(key, status, detail = '') {
+    stages.value = stages.value.map(stage => {
+      if (stage.key === key) {
+        return { ...stage, status, detail: detail || stage.detail }
+      }
+      if (status === 'running' && stage.status === 'running') {
+        return { ...stage, status: 'done' }
+      }
+      return stage
+    })
+  }
+
+  function pushLog(message) {
+    processLogs.value = [...processLogs.value, `${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} ${message}`]
+  }
+
+  function buildSummary(result, method) {
+    const nodes = result.nodes || []
+    const entityLabels = nodes
+      .filter(node => node.type !== '事件')
+      .slice(0, 6)
+      .map(node => node.label)
+    const eventLabels = nodes
+      .filter(node => node.type === '事件')
+      .slice(0, 4)
+      .map(node => node.label)
+
+    extractionSummary.value = {
+      method,
+      nodeCount: nodes.length,
+      edgeCount: (result.edges || []).length,
+      entityLabels,
+      eventLabels
+    }
   }
 
   async function parseFile(file) {
@@ -37,15 +100,24 @@ export function useFileParser() {
     extracting.value = false
     parseError.value = null
     lastResult.value = null
+    resetProcess(file.name)
 
     try {
       if (!graphStore.currentGraphId || !graphStore.currentIntentQuery) {
         throw new Error('请先创建工作区，并填写该工作区的总意图后再导入文档。')
       }
 
+      updateStage('receive', 'running', `已接收 ${file.name}`)
+      pushLog(`已接收文件 ${file.name}`)
+      updateStage('receive', 'done', `文件大小 ${Math.max(1, Math.round(file.size / 1024))} KB`)
+
       const ext = getExt(file.name)
       let result
-      let fileTextContent = null // plain text for saving to backend
+      let fileTextContent = null
+      let extractionMethod = '规则解析'
+
+      updateStage('parse', 'running', `正在解析 ${ext.toUpperCase()} 内容`)
+      pushLog(`开始解析文件内容`)
 
       if (ext === 'json') {
         const text = await file.text()
@@ -56,7 +128,6 @@ export function useFileParser() {
         fileTextContent = text
         result = parseCSV(text)
       } else if (isUnstructuredType(ext) && canUseLLM()) {
-        // Unstructured text + LLM available → use LLM extraction
         let plainText
         if (ext === 'pdf') {
           const arrayBuffer = await file.arrayBuffer()
@@ -65,21 +136,29 @@ export function useFileParser() {
           plainText = await file.text()
         }
         fileTextContent = plainText
+        updateStage('parse', 'done', `解析得到 ${plainText.length} 个字符`)
 
         extracting.value = true
+        updateStage('extract', 'running', '正在按工作区意图调用模型抽取')
+        pushLog('开始按工作区意图抽取实体和事件')
+        extractionMethod = 'LLM 意图抽取'
+
         try {
           result = await extractWithLLM(plainText, settings, {
             workspaceIntent: graphStore.currentIntentQuery,
             fileName: file.name
           })
+          updateStage('extract', 'done', '已完成实体、事件和关系抽取')
         } catch (llmErr) {
-          // LLM failed → fall back to regex extraction
           console.warn('LLM extraction failed, falling back to regex:', llmErr.message)
-          result = fallbackParse(ext, plainText, file)
+          pushLog(`模型抽取失败，已回退到规则解析：${llmErr.message}`)
+          updateStage('extract', 'done', '模型抽取失败，已回退规则解析')
+          extractionMethod = '规则回退解析'
+          result = fallbackParse(ext, plainText)
         }
+
         extracting.value = false
       } else {
-        // Unstructured text without LLM → regex extraction
         if (ext === 'pdf') {
           const arrayBuffer = await file.arrayBuffer()
           fileTextContent = await extractPdfText(arrayBuffer)
@@ -87,11 +166,18 @@ export function useFileParser() {
         } else {
           const text = await file.text()
           fileTextContent = text
-          result = fallbackParse(ext, text, file)
+          result = fallbackParse(ext, text)
         }
       }
 
       if (!result) throw new Error(`不支持的文件格式: ${ext}`)
+
+      if (stages.value.find(item => item.key === 'parse')?.status !== 'done') {
+        updateStage('parse', 'done', `解析完成`)
+      }
+
+      updateStage('structure', 'running', '正在整理节点、事件与关系')
+      pushLog('开始整理抽取结果')
 
       lastResult.value = {
         fileName: file.name,
@@ -103,9 +189,17 @@ export function useFileParser() {
         nodeCount: result.nodes.length,
         edgeCount: result.edges.length
       }
+
+      buildSummary(result, extractionMethod)
+      updateStage('structure', 'done', `识别 ${result.nodes.length} 个节点，${result.edges.length} 条关系`)
+      updateStage('persist', 'ready', '等待确认导入')
+      pushLog(`抽取完成：${result.nodes.length} 个节点，${result.edges.length} 条关系`)
       return lastResult.value
     } catch (e) {
       parseError.value = e.message
+      const runningStage = stages.value.find(item => item.status === 'running')?.key || 'parse'
+      updateStage(runningStage, 'error', e.message)
+      pushLog(`处理失败：${e.message}`)
       throw e
     } finally {
       parsing.value = false
@@ -113,7 +207,6 @@ export function useFileParser() {
     }
   }
 
-  /** Fall back to regex-based parsing for unstructured text */
   function fallbackParse(ext, text) {
     switch (ext) {
       case 'md':
@@ -125,7 +218,6 @@ export function useFileParser() {
     }
   }
 
-  /** Extract plain text from PDF ArrayBuffer (reuses pdfParser internals) */
   async function extractPdfText(arrayBuffer) {
     let pdfjsLib
     try {
@@ -137,7 +229,6 @@ export function useFileParser() {
         pdfjsLib.GlobalWorkerOptions.workerSrc = ''
       }
     } catch {
-      // pdfjs not available, return empty
       return ''
     }
 
@@ -163,12 +254,15 @@ export function useFileParser() {
 
   async function confirmImport() {
     if (!lastResult.value) return
+
+    updateStage('persist', 'running', '正在写入图谱与文档库')
+    pushLog('开始写入图谱与段落证据')
+
     graphStore.mergeGraph(
       { nodes: lastResult.value.nodes, edges: lastResult.value.edges },
       lastResult.value.fileName
     )
 
-    // Save file content to backend for RAG
     const graphId = graphStore.currentGraphId
     if (graphId && lastResult.value.fileTextContent) {
       try {
@@ -185,14 +279,31 @@ export function useFileParser() {
       }
     }
 
+    updateStage('persist', 'done', '导入完成')
+    pushLog('文件已完成导入')
+
     const imported = lastResult.value
     lastResult.value = null
     return imported
   }
 
   function cancelImport() {
+    updateStage('persist', 'idle', '')
     lastResult.value = null
   }
 
-  return { parsing, extracting, parseError, lastResult, parseFile, confirmImport, cancelImport }
+  return {
+    parsing,
+    extracting,
+    parseError,
+    lastResult,
+    currentFileName,
+    currentStage,
+    stages,
+    processLogs,
+    extractionSummary,
+    parseFile,
+    confirmImport,
+    cancelImport
+  }
 }

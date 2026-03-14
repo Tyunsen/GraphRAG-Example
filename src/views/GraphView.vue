@@ -11,7 +11,7 @@
     <main class="workspace-main">
       <div v-if="!graphStore.currentGraphMeta" class="workspace-intro">
         <div class="intro-panel">
-          <div class="intro-kicker">Workspace Graph RAG</div>
+          <div class="intro-kicker">图谱问答系统</div>
           <div class="intro-title">把一个工作区当成一个持续生长的研究项目</div>
           <div class="intro-copy">
             从左侧选择或创建工作区。每个工作区都拥有自己的文件、会话与图谱。
@@ -38,17 +38,20 @@
       </div>
 
       <div v-else class="workspace-main-inner">
-        <div class="workspace-main-body">
-          <ChatPanel v-if="activePanel === 'chat'" />
-          <WorkspaceFilesPanel v-else />
+        <div class="workspace-main-body" :class="{ 'workspace-main-body-chat': activePanel === 'chat' }">
+          <div v-show="activePanel === 'chat'" class="panel-layer panel-layer-chat">
+            <ChatPanel />
+          </div>
+          <div v-show="activePanel === 'files'" class="panel-layer">
+            <WorkspaceFilesPanel />
+          </div>
         </div>
       </div>
     </main>
 
     <aside class="graph-stage-shell">
       <div v-if="!graphStore.currentGraphMeta" class="graph-intro">
-        <div class="graph-intro-kicker">Graph View</div>
-        <div class="graph-intro-title">右侧始终是图谱视图</div>
+        <div class="graph-intro-kicker">图谱视图</div>
         <div class="graph-intro-copy">
           工作区默认显示全图，选中消息后自动聚焦到该消息对应的证据子图。
         </div>
@@ -127,12 +130,17 @@ watch(() => graphStore.currentGraphId, () => {
 }
 
 .workspace-main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: linear-gradient(180deg, #ffffff 0%, #f8f9fb 100%);
 }
 
 .workspace-main-inner {
+  flex: 1;
+  min-height: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -140,9 +148,27 @@ watch(() => graphStore.currentGraphId, () => {
 
 .workspace-main-body {
   flex: 1;
+  display: flex;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 20px 24px 24px;
+  position: relative;
+}
+
+.workspace-main-body-chat {
+  padding: 0;
+}
+
+.panel-layer {
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.panel-layer-chat {
+  background: #fff;
 }
 
 .workspace-intro,
@@ -173,8 +199,7 @@ watch(() => graphStore.currentGraphId, () => {
   color: var(--color-text-muted);
 }
 
-.intro-title,
-.graph-intro-title {
+.intro-title {
   margin-top: 8px;
   font-size: 30px;
   line-height: 1.15;

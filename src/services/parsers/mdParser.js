@@ -4,6 +4,15 @@
  */
 import { extractFromText } from './txtParser.js'
 
+function stripInline(text) {
+  return String(text || '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/(`{1,3})([^`]+)\1/g, '$2')
+    .replace(/(\*{1,3}|_{1,3})([^*_]+)\1/g, '$2')
+    .replace(/<[^>]+>/g, ' ')
+}
+
 export function parseMD(text) {
   const headings = []
   const plainLines = []

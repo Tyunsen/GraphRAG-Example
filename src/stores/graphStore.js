@@ -354,6 +354,17 @@ export const useGraphStore = defineStore('graph', () => {
     }
   }
 
+  async function refreshGraphList() {
+    try {
+      const latest = await fetchGraphList()
+      savedGraphs.value = latest
+      return latest
+    } catch (error) {
+      console.warn('[graphStore] refresh list failed:', error.message)
+      return savedGraphs.value
+    }
+  }
+
   async function createWorkspace({ name, intentQuery, intentSummary = '' }) {
     const id = generateId('g')
     const payload = {
@@ -370,7 +381,7 @@ export const useGraphStore = defineStore('graph', () => {
       nodeCount: 0,
       edgeCount: 0,
       fileCount: 0,
-      sessionCount: 1,
+      sessionCount: 0,
       createdAt: Date.now(),
       updatedAt: Date.now()
     })
@@ -401,6 +412,12 @@ export const useGraphStore = defineStore('graph', () => {
     } catch (error) {
       console.warn('[graphStore] rename/update failed:', error.message)
     }
+  }
+
+  function syncCurrentGraphMeta(patch = {}) {
+    const entry = savedGraphs.value.find(item => item.id === currentGraphId.value)
+    if (!entry) return
+    Object.assign(entry, patch)
   }
 
   function createNewGraph() {
@@ -467,6 +484,8 @@ export const useGraphStore = defineStore('graph', () => {
     backendReady,
     saveCurrentGraph,
     loadGraph,
+    refreshGraphList,
+    syncCurrentGraphMeta,
     deleteSavedGraph,
     renameGraph,
     createNewGraph,
