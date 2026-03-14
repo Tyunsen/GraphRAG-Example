@@ -2,7 +2,7 @@
   <header class="app-header">
     <div class="header-left">
       <h1 class="header-title">
-        <router-link to="/">知识图谱工作台</router-link>
+        <router-link to="/">Graph Workspace</router-link>
       </h1>
       <div class="header-meta">
         <span class="header-workspace" v-if="graphStore.currentGraphName">{{ graphStore.currentGraphName }}</span>
@@ -25,9 +25,8 @@ const graphStore = useGraphStore()
   height: var(--header-height);
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 0 20px;
-  background: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.9);
   border-bottom: 1px solid var(--color-border);
   backdrop-filter: blur(12px);
   flex-shrink: 0;

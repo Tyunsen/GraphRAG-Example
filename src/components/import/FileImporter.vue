@@ -16,10 +16,11 @@
       style="display: none"
     />
     <div class="file-importer-content">
-      <div class="file-importer-icon">📁</div>
-      <p class="file-importer-text">{{ disabled ? '请先创建工作区并填写总意图' : '拖拽文件到此处或点击上传' }}</p>
-      <p class="file-importer-hint">支持 JSON / CSV / TXT / MD / PDF 格式</p>
-      <p class="file-importer-desc">系统会基于工作区意图抽取实体、事件和关系，不再默认做全量抽取。</p>
+      <div class="file-importer-title">{{ disabled ? '先选择工作区并设置总意图' : '上传到当前工作区' }}</div>
+      <div class="file-importer-desc">
+        {{ disabled ? '没有总意图时，系统不会开始抽取。' : '拖拽文件到这里，或点击选择文档。上传后会基于当前工作区意图抽取图谱。' }}
+      </div>
+      <div class="file-importer-meta">支持 JSON / CSV / TXT / MD / PDF</div>
     </div>
   </div>
 </template>
@@ -65,42 +66,41 @@ function onFileSelect(event) {
 
 <style scoped>
 .file-importer {
-  border: 2px dashed var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  text-align: center;
+  border: 1px dashed rgba(79, 109, 245, 0.28);
+  border-radius: 16px;
+  padding: 18px;
   cursor: pointer;
-  transition: all 0.2s;
-  background: var(--color-bg);
+  transition: all 0.2s ease;
+  background: rgba(79, 109, 245, 0.04);
 }
 .file-importer:hover,
 .file-importer.dragging {
   border-color: var(--color-primary);
-  background: rgba(79, 109, 245, 0.04);
+  background: rgba(79, 109, 245, 0.08);
 }
 .file-importer.disabled {
   cursor: not-allowed;
   opacity: 0.72;
-}
-.file-importer.disabled:hover {
   border-color: var(--color-border);
-  background: var(--color-bg);
+  background: rgba(241, 245, 249, 0.8);
 }
-.file-importer-icon {
-  font-size: 32px;
-  margin-bottom: 8px;
+.file-importer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.file-importer-text {
-  font-weight: 500;
-  margin-bottom: 4px;
+.file-importer-title {
+  font-size: 13px;
+  font-weight: 700;
 }
-.file-importer-hint,
-.file-importer-desc {
+.file-importer-desc,
+.file-importer-meta {
   font-size: 12px;
-  color: var(--color-text-muted);
+  line-height: 1.55;
+  color: var(--color-text-secondary);
 }
-.file-importer-desc {
-  margin-top: 4px;
-  line-height: 1.5;
+.file-importer-meta {
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 </style>

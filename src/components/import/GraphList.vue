@@ -1,64 +1,68 @@
 <template>
   <div class="graph-list">
     <div class="graph-list-header">
-      <h4>工作区列表</h4>
-      <button class="btn btn-sm btn-primary" @click="toggleCreate">
+      <div>
+        <div class="graph-list-title">项目列表</div>
+        <div class="graph-list-subtitle">每个工作区承载自己的文件、图谱和会话。</div>
+      </div>
+      <button class="create-btn" @click="toggleCreate">
         {{ creating ? '取消' : '新建' }}
       </button>
     </div>
 
     <div v-if="creating" class="workspace-form">
-      <input class="input" v-model="createName" placeholder="工作区名称，例如：伊朗战争追踪" />
+      <input class="input" v-model="createName" placeholder="工作区名称，例如：伊朗局势追踪" />
       <textarea
         class="input workspace-intent"
         v-model="createIntent"
-        placeholder="工作区总意图，例如：围绕 2026 年伊朗战争局势，抽取军事打击、核设施、油价与航运风险相关的实体、事件和事件链。"
+        placeholder="输入这个工作区的总意图，例如：围绕伊朗战争，提取军事打击、核设施、油价、航运风险与外交信号相关的实体、事件与事件链。"
       />
       <button class="btn btn-primary btn-block" @click="submitCreate">创建工作区</button>
     </div>
 
     <div v-if="graphStore.savedGraphs.length === 0" class="graph-list-empty">
-      <p>暂无工作区</p>
-      <p class="text-muted">先建工作区并填写总意图，再导入文件。</p>
+      <p>还没有工作区</p>
+      <p class="text-muted">先创建一个工作区，再导入文档和发起会话。</p>
     </div>
 
     <div class="graph-list-items" v-else>
-      <div
+      <button
         v-for="workspace in sortedGraphs"
         :key="workspace.id"
         class="graph-item"
         :class="{ active: graphStore.currentGraphId === workspace.id }"
+        @click="loadGraph(workspace.id)"
       >
-        <div class="graph-item-main" @click="loadGraph(workspace.id)">
-          <div v-if="editingId === workspace.id" class="workspace-form inline-form" @click.stop>
-            <input class="input" v-model="editName" placeholder="工作区名称" />
-            <textarea
-              class="input workspace-intent"
-              v-model="editIntent"
-              placeholder="输入这个工作区的总意图，后续导入将按该意图抽取。"
-            />
-            <div class="inline-actions">
-              <button class="btn btn-sm btn-primary" @click="confirmEdit">保存</button>
-              <button class="btn btn-sm btn-secondary" @click="cancelEdit">取消</button>
-            </div>
-          </div>
-
-          <div v-else class="graph-item-info">
+        <div class="graph-item-main">
+          <div class="graph-item-topline">
             <span class="graph-item-name">{{ workspace.name }}</span>
-            <span class="graph-item-meta">
-              {{ workspace.nodeCount }} 节点 · {{ workspace.edgeCount }} 关系 · {{ workspace.fileCount || 0 }} 文档 · {{ workspace.sessionCount || 0 }} 会话
-            </span>
-            <span class="graph-item-intent">{{ workspace.intentQuery }}</span>
-            <span class="graph-item-time">{{ formatTime(workspace.updatedAt || workspace.createdAt) }}</span>
+            <span v-if="graphStore.currentGraphId === workspace.id" class="graph-item-badge">当前</span>
           </div>
-
-          <div v-if="graphStore.currentGraphId === workspace.id" class="graph-item-active-badge">当前</div>
+          <div class="graph-item-meta">
+            {{ workspace.fileCount || 0 }} 文档 · {{ workspace.sessionCount || 0 }} 会话 · {{ workspace.nodeCount }} 节点
+          </div>
+          <div v-if="graphStore.currentGraphId === workspace.id" class="graph-item-intent">{{ workspace.intentQuery }}</div>
+          <div class="graph-item-time">{{ formatTime(workspace.updatedAt || workspace.createdAt) }}</div>
         </div>
 
-        <div class="graph-item-actions">
-          <button class="action-btn" title="编辑工作区" @click.stop="startEdit(workspace)">✎</button>
-          <button class="action-btn action-btn-danger" title="删除工作区" @click.stop="deleteGraph(workspace.id)">✕</button>
+        <div class="graph-item-actions" @click.stop>
+          <button class="action-btn" title="编辑工作区" @click="startEdit(workspace)">编辑</button>
+          <button class="action-btn action-btn-danger" title="删除工作区" @click="deleteGraph(workspace.id)">删除</button>
         </div>
+      </button>
+    </div>
+
+    <div v-if="editingId" class="workspace-form workspace-form-edit">
+      <div class="graph-list-title">编辑工作区</div>
+      <input class="input" v-model="editName" placeholder="工作区名称" />
+      <textarea
+        class="input workspace-intent"
+        v-model="editIntent"
+        placeholder="更新这个工作区的总意图"
+      />
+      <div class="inline-actions">
+        <button class="btn btn-primary" @click="confirmEdit">保存</button>
+        <button class="btn btn-secondary" @click="cancelEdit">取消</button>
       </div>
     </div>
   </div>
@@ -83,8 +87,7 @@ const sortedGraphs = computed(() =>
 )
 
 async function loadGraph(graphId) {
-  if (editingId.value) return
-  if (graphStore.currentGraphId === graphId) return
+  if (editingId.value || graphStore.currentGraphId === graphId) return
   await graphStore.loadGraph(graphId)
 }
 
@@ -109,6 +112,7 @@ async function submitCreate() {
 
 async function deleteGraph(graphId) {
   await graphStore.deleteSavedGraph(graphId)
+  if (editingId.value === graphId) cancelEdit()
 }
 
 function startEdit(workspace) {
@@ -123,7 +127,7 @@ async function confirmEdit() {
     name: editName.value.trim() || '未命名工作区',
     intentQuery: editIntent.value.trim()
   })
-  editingId.value = null
+  cancelEdit()
 }
 
 function cancelEdit() {
@@ -136,50 +140,71 @@ function formatTime(ts) {
   if (!ts) return ''
   const date = new Date(ts)
   const now = new Date()
-  const isToday = date.toDateString() === now.toDateString()
   const time = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
-  if (isToday) return time
+  if (date.toDateString() === now.toDateString()) return `今天 ${time}`
   return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')} ${time}`
 }
 </script>
 
 <style scoped>
+.graph-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 .graph-list-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 12px;
+  gap: 10px;
 }
-.graph-list-header h4 {
+.graph-list-title {
   font-size: 13px;
+  font-weight: 700;
+}
+.graph-list-subtitle {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+.create-btn {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(79, 109, 245, 0.1);
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 600;
 }
 .workspace-form {
   display: grid;
   gap: 8px;
-  margin-bottom: 12px;
-  padding: 10px;
-  background: var(--color-bg);
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.95);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
 }
-.inline-form {
-  margin-bottom: 0;
-  width: 100%;
+.workspace-form-edit {
+  margin-top: 4px;
 }
 .workspace-intent {
-  min-height: 96px;
+  min-height: 92px;
   resize: vertical;
+}
+.btn-block {
+  width: 100%;
 }
 .inline-actions {
   display: flex;
   gap: 8px;
 }
-.btn-block {
-  width: 100%;
-}
 .graph-list-empty {
   text-align: center;
-  padding: 24px 10px;
+  padding: 18px 10px;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.72);
+  border: 1px dashed rgba(148, 163, 184, 0.4);
   color: var(--color-text-muted);
   font-size: 13px;
 }
@@ -193,41 +218,49 @@ function formatTime(ts) {
   gap: 6px;
 }
 .graph-item {
+  width: 100%;
   display: flex;
   align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
   padding: 10px 12px;
-  background: var(--color-bg);
-  border-radius: var(--radius-md);
-  border: 2px solid transparent;
-  cursor: pointer;
-  transition: all 0.15s;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid transparent;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 .graph-item:hover {
-  background: var(--color-bg-hover);
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(148, 163, 184, 0.24);
+  transform: translateY(-1px);
 }
 .graph-item.active {
-  border-color: var(--color-primary);
-  background: rgba(79, 109, 245, 0.04);
+  border-color: rgba(79, 109, 245, 0.28);
+  background: rgba(79, 109, 245, 0.08);
 }
 .graph-item-main {
+  min-width: 0;
   flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
 }
-.graph-item-info {
+.graph-item-topline {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 .graph-item-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.graph-item-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff;
 }
 .graph-item-meta,
 .graph-item-time,
@@ -235,45 +268,38 @@ function formatTime(ts) {
   font-size: 11px;
   color: var(--color-text-secondary);
 }
+.graph-item-meta {
+  margin-top: 4px;
+}
 .graph-item-intent {
-  line-height: 1.45;
+  margin-top: 6px;
+  line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.graph-item-active-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: var(--color-primary);
-  color: #fff;
-  flex-shrink: 0;
+.graph-item-time {
+  margin-top: 6px;
 }
 .graph-item-actions {
   display: flex;
-  gap: 2px;
+  flex-direction: column;
+  gap: 4px;
   flex-shrink: 0;
-  margin-left: 4px;
 }
 .action-btn {
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  transition: all 0.15s;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(241, 245, 249, 0.92);
+  color: var(--color-text-secondary);
+  font-size: 11px;
 }
 .action-btn:hover {
-  background: var(--color-bg-input);
+  background: rgba(226, 232, 240, 0.95);
   color: var(--color-text);
 }
-.action-btn-danger:hover {
-  background: #fef2f2;
+.action-btn-danger {
   color: var(--color-danger);
 }
 </style>

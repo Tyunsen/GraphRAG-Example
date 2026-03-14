@@ -1,48 +1,46 @@
 <template>
   <div class="chat-panel">
-    <div class="session-toolbar">
-      <div class="session-title">会话</div>
-      <button class="btn btn-sm btn-primary" @click="ragStore.createSession()">新建</button>
-    </div>
-
-    <div class="session-list" v-if="ragStore.sessions.length > 0">
+    <div class="chat-thread-header">
+      <div>
+        <div class="chat-thread-title">{{ ragStore.currentSession?.title || '当前会话' }}</div>
+        <div class="chat-thread-subtitle">围绕当前工作区继续提问。</div>
+      </div>
       <button
-        v-for="session in ragStore.sessions"
-        :key="session.id"
-        class="session-chip"
-        :class="{ active: ragStore.currentSessionId === session.id }"
-        @click="ragStore.switchSession(session.id)"
-      >
-        {{ session.title }}
-      </button>
+        v-if="ragStore.messages.length > 0"
+        class="clear-thread-btn"
+        @click="ragStore.clearMessages()"
+      >清空</button>
     </div>
 
-    <div class="chat-messages" ref="messagesRef">
-      <div v-if="ragStore.messages.length === 0" class="chat-empty">
-        <p>围绕当前工作区做证据优先问答</p>
-        <p class="text-muted">进入会话默认展示完整图谱，点击某条问题后聚焦它对应的证据子图。</p>
+    <div class="chat-thread-card">
+      <div class="chat-messages" ref="messagesRef">
+        <div v-if="ragStore.messages.length === 0" class="chat-empty">
+          <p>这个会话还没有内容</p>
+          <p class="text-muted">输入问题后，系统会基于当前工作区的文件和图谱来回答。</p>
+        </div>
+        <ChatMessage
+          v-for="msg in ragStore.messages"
+          :key="msg.id"
+          :msg="msg"
+          :active="ragStore.activeMessageId === msg.id"
+          @select="ragStore.selectMessage"
+        />
+        <div v-if="ragStore.isLoading" class="chat-loading">
+          <span class="loading-dots">检索与生成中...</span>
+        </div>
       </div>
-      <ChatMessage
-        v-for="msg in ragStore.messages"
-        :key="msg.id"
-        :msg="msg"
-        :active="ragStore.activeMessageId === msg.id"
-        @select="ragStore.selectMessage"
-      />
-      <div v-if="ragStore.isLoading" class="chat-loading">
-        <span class="loading-dots">检索与生成中...</span>
-      </div>
-    </div>
 
-    <div class="chat-input-area">
-      <input
-        class="input chat-input"
-        v-model="inputText"
-        placeholder="输入问题..."
-        @keydown.enter="sendMessage"
-        :disabled="ragStore.isLoading || !graphStore.currentGraphId"
-      />
-      <button class="btn btn-primary" @click="sendMessage" :disabled="!inputText.trim() || ragStore.isLoading">发送</button>
+      <div class="chat-input-area">
+        <textarea
+          class="input chat-input"
+          v-model="inputText"
+          rows="3"
+          placeholder="输入问题，例如：油价为什么上升了？"
+          @keydown.enter.exact.prevent="sendMessage"
+          :disabled="ragStore.isLoading || !graphStore.currentGraphId"
+        ></textarea>
+        <button class="btn btn-primary send-btn" @click="sendMessage" :disabled="!inputText.trim() || ragStore.isLoading">发送</button>
+      </div>
     </div>
   </div>
 </template>
@@ -79,54 +77,60 @@ watch(() => ragStore.messages.length, () => {
 .chat-panel {
   display: flex;
   flex-direction: column;
+  gap: 12px;
+  min-height: 0;
   height: 100%;
 }
-.session-toolbar {
+.chat-thread-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 10px;
 }
-.session-title {
+.chat-thread-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.chat-thread-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.clear-thread-btn {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(79, 109, 245, 0.1);
+  color: var(--color-primary);
   font-size: 12px;
   font-weight: 600;
 }
-.session-list {
+.chat-thread-card {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.session-chip {
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-.session-chip.active {
-  background: rgba(79, 109, 245, 0.1);
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+  flex-direction: column;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 .chat-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 12px 0;
+  padding: 16px;
 }
 .chat-empty {
   text-align: center;
-  padding: 30px 10px;
+  padding: 48px 12px;
   color: var(--color-text-muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 .text-muted {
   font-size: 12px;
   margin-top: 4px;
 }
 .chat-loading {
-  padding: 8px 14px;
+  padding: 8px 0;
   font-size: 13px;
   color: var(--color-text-muted);
 }
@@ -139,11 +143,16 @@ watch(() => ragStore.messages.length, () => {
 }
 .chat-input-area {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  padding-top: 10px;
+  padding: 14px 16px 16px;
   border-top: 1px solid var(--color-border-light);
 }
 .chat-input {
-  flex: 1;
+  resize: vertical;
+  min-height: 92px;
+}
+.send-btn {
+  align-self: flex-end;
 }
 </style>
