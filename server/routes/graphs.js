@@ -123,6 +123,7 @@ function buildEvidenceSummary(kind, graphId, canonical, mergedKeys = []) {
     return rows.map(row => ({
       fileId: row.fileId,
       fileName: row.fileName,
+      sourceCanonicalKey: row.canonicalKey,
       mentionText: row.mentionText,
       paragraphRefs: parseJsonArray(row.paragraphRefs),
       confidence: Number(row.confidence || 0),
@@ -142,12 +143,93 @@ function buildEvidenceSummary(kind, graphId, canonical, mergedKeys = []) {
   return rows.map(row => ({
       fileId: row.fileId,
       fileName: row.fileName,
+      sourceCanonicalKey: row.canonicalKey,
       mentionText: row.label,
       summary: row.summary,
       paragraphRefs: parseJsonArray(row.paragraphRefs),
       confidence: Number(row.confidence || 0),
       createdAt: Number(row.createdAt || 0)
     }))
+}
+
+function loadParagraphDetails(graphId, fileId, paragraphRefs = []) {
+  const indexes = [...new Set(paragraphRefs.map(item => Number(item)).filter(item => Number.isInteger(item) && item > 0))]
+  if (indexes.length === 0) return []
+
+  const placeholders = indexes.map(() => '?').join(', ')
+  return allRows(
+    `
+    SELECT paragraphIndex, content
+    FROM file_chunks
+    WHERE graphId = ? AND fileId = ? AND chunkKind = 'paragraph' AND paragraphIndex IN (${placeholders})
+    ORDER BY paragraphIndex ASC
+    `,
+    [graphId, fileId, ...indexes]
+  ).map(row => ({
+    paragraphIndex: Number(row.paragraphIndex || 0),
+    content: row.content || ''
+  }))
+}
+
+function buildMergeReason(kind, canonical, evidence) {
+  if (kind === 'entity') {
+    if (evidence.mentionText === canonical.label) {
+      return '该 mention 被选为当前 canonical 标签'
+    }
+    if ((canonical.aliases || []).includes(evidence.mentionText)) {
+      return '该 mention 作为别名并入同一实体'
+    }
+    return '该 mention 与当前实体在别名归一化后被合并'
+  }
+
+  if (evidence.mentionText === canonical.label) {
+    return '该 mention 被选为当前 canonical 事件标题'
+  }
+
+  const reasons = []
+  if (canonical.trigger && evidence.summary?.includes(canonical.trigger)) reasons.push(`触发词命中「${canonical.trigger}」`)
+  if (canonical.subjectKeys?.length) reasons.push('主体角色与当前事件对齐')
+  if (canonical.objectKeys?.length) reasons.push('客体角色与当前事件对齐')
+  return reasons.join('，') || '该 mention 与当前事件在触发词和角色上被合并'
+}
+
+function enrichEvidenceSummary(kind, graphId, canonical, evidence = []) {
+  return evidence.map(item => ({
+    ...item,
+    mergeReason: buildMergeReason(kind, canonical, item),
+    paragraphs: loadParagraphDetails(graphId, item.fileId, item.paragraphRefs)
+  }))
+}
+
+function buildMergeSummary(kind, canonical, evidence = []) {
+  const groups = new Map()
+
+  for (const item of evidence) {
+    const key = item.sourceCanonicalKey || canonical.canonicalKey
+    if (!groups.has(key)) {
+      groups.set(key, {
+        sourceCanonicalKey: key,
+        mentions: new Set(),
+        fileNames: new Set(),
+        paragraphRefs: new Set()
+      })
+    }
+
+    const group = groups.get(key)
+    group.mentions.add(item.mentionText)
+    if (item.fileName) group.fileNames.add(item.fileName)
+    for (const ref of item.paragraphRefs || []) group.paragraphRefs.add(Number(ref))
+  }
+
+  return [...groups.values()].map(group => ({
+    sourceCanonicalKey: group.sourceCanonicalKey,
+    mentions: [...group.mentions],
+    fileNames: [...group.fileNames],
+    paragraphRefs: [...group.paragraphRefs].filter(Boolean).sort((a, b) => a - b),
+    reason: kind === 'entity'
+      ? '这些 mention 在别名归一化后被并入同一实体'
+      : '这些 mention 在事件类型、触发词和角色上被并入同一事件'
+  }))
 }
 
 function buildRelatedEdgeSummary(graphId, nodeId) {
@@ -295,7 +377,13 @@ router.get('/:id/nodes/:nodeId/explain', (req, res) => {
 
     const canonical = match.canonical
     const mergedKeys = canonical.properties?.mergedCanonicalKeys || [canonical.canonicalKey]
-    const evidence = buildEvidenceSummary(match.kind, req.params.id, canonical, mergedKeys)
+    const evidence = enrichEvidenceSummary(
+      match.kind,
+      req.params.id,
+      canonical,
+      buildEvidenceSummary(match.kind, req.params.id, canonical, mergedKeys)
+    )
+    const mergeSummary = buildMergeSummary(match.kind, canonical, evidence)
 
     res.json({
       node: {
@@ -316,6 +404,7 @@ router.get('/:id/nodes/:nodeId/explain', (req, res) => {
         summary: canonical.summary || '',
         properties: canonical.properties || {}
       },
+      mergeSummary,
       evidence,
       relatedEdges: buildRelatedEdgeSummary(req.params.id, req.params.nodeId)
     })

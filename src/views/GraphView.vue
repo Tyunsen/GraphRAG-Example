@@ -94,6 +94,24 @@
               </div>
             </div>
 
+            <div v-if="nodeExplain.mergeSummary?.length" class="graph-node-card-group">
+              <div class="graph-node-card-label">合并说明</div>
+              <div class="graph-node-merge-list">
+                <div
+                  v-for="item in nodeExplain.mergeSummary.slice(0, 4)"
+                  :key="item.sourceCanonicalKey"
+                  class="graph-node-merge-item"
+                >
+                  <div class="graph-node-merge-tags">
+                    <span v-for="mention in item.mentions" :key="`${item.sourceCanonicalKey}-${mention}`" class="graph-node-tag graph-node-tag-muted">
+                      {{ mention }}
+                    </span>
+                  </div>
+                  <div class="graph-node-merge-copy">{{ item.reason }}</div>
+                </div>
+              </div>
+            </div>
+
             <div
               v-if="nodeExplain.canonical?.kind === 'event' && (nodeExplain.canonical.subjectKeys?.length || nodeExplain.canonical.objectKeys?.length)"
               class="graph-node-card-group"
@@ -110,10 +128,35 @@
               <div class="graph-node-evidence-list">
                 <div v-for="item in nodeExplain.evidence.slice(0, 4)" :key="`${item.fileId}-${item.mentionText}-${item.createdAt}`" class="graph-node-evidence-item">
                   <div class="graph-node-evidence-file">{{ item.fileName }}</div>
-                  <div class="graph-node-evidence-copy">
+                  <div class="graph-node-evidence-copy graph-node-evidence-copy-primary">
                     <span>{{ item.mentionText }}</span>
                     <span v-if="item.paragraphRefs?.length">第 {{ item.paragraphRefs.join('、') }} 段</span>
                   </div>
+                  <div class="graph-node-evidence-reason">{{ item.mergeReason }}</div>
+                  <div class="graph-node-evidence-copy">
+                    <span v-if="item.summary">{{ item.summary }}</span>
+                  </div>
+                  <div v-if="item.paragraphs?.length" class="graph-node-paragraph-list">
+                    <div
+                      v-for="paragraph in item.paragraphs.slice(0, 2)"
+                      :key="`${item.fileId}-${paragraph.paragraphIndex}`"
+                      class="graph-node-paragraph"
+                    >
+                      <div class="graph-node-paragraph-index">第 {{ paragraph.paragraphIndex }} 段</div>
+                      <div class="graph-node-paragraph-content">{{ paragraph.content }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="nodeExplain.relatedEdges?.length" class="graph-node-card-group">
+              <div class="graph-node-card-label">关联边</div>
+              <div class="graph-node-edge-list">
+                <div v-for="edge in nodeExplain.relatedEdges.slice(0, 5)" :key="edge.id" class="graph-node-edge-item">
+                  <span class="graph-node-edge-direction">{{ edge.direction === 'out' ? '→' : '←' }}</span>
+                  <span class="graph-node-edge-label">{{ edge.label }}</span>
+                  <span class="graph-node-edge-target">{{ edge.otherLabel }}</span>
                 </div>
               </div>
             </div>
@@ -447,6 +490,44 @@ function formatRoleKeys(keys = []) {
   font-weight: 600;
 }
 
+.graph-node-tag-muted {
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--color-text-secondary);
+}
+
+.graph-node-merge-list,
+.graph-node-edge-list {
+  display: grid;
+  gap: 8px;
+}
+
+.graph-node-merge-item,
+.graph-node-edge-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.graph-node-merge-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.graph-node-merge-copy,
+.graph-node-evidence-reason,
+.graph-node-paragraph-content,
+.graph-node-edge-item {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--color-text-secondary);
+}
+
+.graph-node-merge-copy {
+  margin-top: 6px;
+}
+
 .graph-node-evidence-list {
   display: grid;
   gap: 8px;
@@ -469,6 +550,57 @@ function formatRoleKeys(keys = []) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.graph-node-evidence-copy-primary {
+  margin-top: 6px;
+  color: var(--color-text);
+}
+
+.graph-node-evidence-reason {
+  margin-top: 4px;
+}
+
+.graph-node-paragraph-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.graph-node-paragraph {
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.graph-node-paragraph-index {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.graph-node-paragraph-content {
+  margin-top: 4px;
+}
+
+.graph-node-edge-item {
+  display: grid;
+  grid-template-columns: 18px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.graph-node-edge-direction,
+.graph-node-edge-label {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.graph-node-edge-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .graph-stage {
