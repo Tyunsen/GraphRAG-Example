@@ -197,6 +197,330 @@ function canonicalizeEventKey({
   return `event:${parts.join('|')}`
 }
 
+function parseJsonArray(value) {
+  const parsed = parseJson(value, [])
+  return Array.isArray(parsed) ? parsed : []
+}
+
+function canonicalKeyToToken(key = '') {
+  return String(key || '')
+    .trim()
+    .replace(/^(entity|event):/i, '')
+}
+
+function toBigrams(value = '') {
+  const text = String(value || '').trim()
+  if (!text) return new Set()
+  if (text.length < 2) return new Set([text])
+
+  const grams = new Set()
+  for (let index = 0; index < text.length - 1; index++) {
+    grams.add(text.slice(index, index + 2))
+  }
+  return grams
+}
+
+function overlapRatio(left = [], right = []) {
+  const leftSet = new Set(left.filter(Boolean))
+  const rightSet = new Set(right.filter(Boolean))
+  if (leftSet.size === 0 || rightSet.size === 0) return 0
+
+  let overlap = 0
+  for (const item of leftSet) {
+    if (rightSet.has(item)) overlap += 1
+  }
+  return overlap / Math.max(leftSet.size, rightSet.size)
+}
+
+function textSimilarity(left = '', right = '') {
+  const a = normalizeAliasToken(left)
+  const b = normalizeAliasToken(right)
+  if (!a || !b) return 0
+  if (a === b) return 1
+  if (a.includes(b) || b.includes(a)) {
+    const lengthRatio = Math.min(a.length, b.length) / Math.max(a.length, b.length)
+    return 0.82 + (lengthRatio * 0.12)
+  }
+
+  const aBigrams = toBigrams(a)
+  const bBigrams = toBigrams(b)
+  if (aBigrams.size === 0 || bBigrams.size === 0) return 0
+
+  let overlap = 0
+  for (const gram of aBigrams) {
+    if (bBigrams.has(gram)) overlap += 1
+  }
+
+  return overlap / Math.max(aBigrams.size, bBigrams.size)
+}
+
+function isGenericEntityType(entityType = '') {
+  const type = String(entityType || '').trim()
+  return !type || type === 'default' || type === '概念'
+}
+
+function areEntityTypesCompatible(left = '', right = '') {
+  if (left === right) return true
+  if (isGenericEntityType(left) || isGenericEntityType(right)) return true
+  return false
+}
+
+function buildEntitySignal(row) {
+  const properties = parseJson(row.properties, {})
+  const aliasCandidates = [
+    row.mentionText,
+    row.label,
+    canonicalKeyToToken(row.canonicalKey),
+    ...(Array.isArray(properties.aliases) ? properties.aliases : []),
+    properties.alias,
+    properties.normalizedName,
+    properties.name
+  ]
+
+  const tokens = dedupe(aliasCandidates
+    .map(item => normalizeAliasToken(item))
+    .filter(item => item && item.length >= 2))
+    .sort((a, b) => b.length - a.length)
+
+  return {
+    row,
+    type: String(row.entityType || 'default').trim() || 'default',
+    label: String(row.mentionText || '').trim(),
+    tokens,
+    primaryToken: tokens[0] || normalizeAliasToken(row.mentionText)
+  }
+}
+
+function scoreEntityCluster(cluster, signal) {
+  if (cluster.sourceKeys.has(signal.row.canonicalKey)) return 1
+  if (!areEntityTypesCompatible(cluster.type, signal.type)) return 0
+
+  let best = 0
+  for (const token of signal.tokens) {
+    if (!token) continue
+    if (cluster.tokens.has(token)) return 0.98
+
+    for (const clusterToken of cluster.tokens) {
+      const score = textSimilarity(token, clusterToken)
+      if (score > best) best = score
+    }
+  }
+
+  return best
+}
+
+function makeEntityCluster(signal) {
+  return {
+    sourceKeys: new Set([signal.row.canonicalKey]),
+    rows: [signal.row],
+    tokens: new Set(signal.tokens),
+    typeVotes: [signal.type],
+    type: signal.type
+  }
+}
+
+function mergeEntitySignal(cluster, signal) {
+  cluster.sourceKeys.add(signal.row.canonicalKey)
+  cluster.rows.push(signal.row)
+  signal.tokens.forEach(token => cluster.tokens.add(token))
+  cluster.typeVotes.push(signal.type)
+  cluster.type = pickMostFrequent(cluster.typeVotes) || cluster.type
+}
+
+function clusterEntityRows(entityRows = []) {
+  const clusters = []
+  const keyAliasMap = new Map()
+
+  for (const row of entityRows) {
+    const signal = buildEntitySignal(row)
+    if (!signal.primaryToken) continue
+
+    let bestCluster = null
+    let bestScore = 0
+    for (const cluster of clusters) {
+      const score = scoreEntityCluster(cluster, signal)
+      if (score > bestScore) {
+        bestScore = score
+        bestCluster = cluster
+      }
+    }
+
+    if (!bestCluster || bestScore < 0.88) {
+      bestCluster = makeEntityCluster(signal)
+      clusters.push(bestCluster)
+    } else {
+      mergeEntitySignal(bestCluster, signal)
+    }
+  }
+
+  for (const cluster of clusters) {
+    const labels = cluster.rows.map(row => row.mentionText)
+    const label = pickMostFrequent(labels)
+    const type = pickMostFrequent(cluster.typeVotes) || 'default'
+    const finalKey = canonicalizeEntityKey(label, type, {
+      aliases: [...cluster.tokens]
+    })
+    cluster.finalKey = finalKey
+    cluster.label = label
+    cluster.type = type
+
+    for (const row of cluster.rows) {
+      keyAliasMap.set(row.canonicalKey, finalKey)
+    }
+  }
+
+  return { clusters, keyAliasMap }
+}
+
+function buildEventSignal(row, entityKeyAliasMap = new Map()) {
+  const subjectKeys = dedupe(parseJsonArray(row.subjectKeys)
+    .map(item => entityKeyAliasMap.get(item) || item)
+    .filter(Boolean))
+    .sort()
+  const objectKeys = dedupe(parseJsonArray(row.objectKeys)
+    .map(item => entityKeyAliasMap.get(item) || item)
+    .filter(Boolean))
+    .sort()
+
+  return {
+    row,
+    label: String(row.label || '').trim(),
+    eventType: normalizeAliasToken(row.eventType || '一般事件'),
+    trigger: normalizeAliasToken(row.trigger || row.predicateText || row.label),
+    subjectKeys,
+    objectKeys,
+    locationText: normalizeLocationToken(row.locationText),
+    timeText: normalizeTimeToken(row.timeText),
+    summaryToken: normalizeAliasToken(row.summary || row.label)
+  }
+}
+
+function scoreEventCluster(cluster, signal) {
+  if (cluster.sourceKeys.has(signal.row.canonicalKey)) return 1
+
+  let score = 0
+  if (cluster.eventType === signal.eventType) score += 0.28
+  else if (cluster.eventType === normalizeAliasToken('一般事件') || signal.eventType === normalizeAliasToken('一般事件')) score += 0.1
+  else return 0
+
+  const triggerScore = Math.max(
+    textSimilarity(cluster.trigger, signal.trigger),
+    textSimilarity(cluster.label, signal.label),
+    textSimilarity(cluster.summaryToken, signal.summaryToken)
+  )
+  if (triggerScore >= 0.92) score += 0.34
+  else if (triggerScore >= 0.7) score += 0.24
+  else if (triggerScore >= 0.55) score += 0.14
+  else return 0
+
+  const subjectOverlap = overlapRatio(cluster.subjectKeys, signal.subjectKeys)
+  const objectOverlap = overlapRatio(cluster.objectKeys, signal.objectKeys)
+  if (subjectOverlap > 0) score += 0.18 * subjectOverlap
+  if (objectOverlap > 0) score += 0.14 * objectOverlap
+
+  if (cluster.locationText && signal.locationText && cluster.locationText === signal.locationText) score += 0.08
+  if (cluster.timeText && signal.timeText && cluster.timeText === signal.timeText) score += 0.08
+
+  if (!signal.subjectKeys.length && !signal.objectKeys.length && triggerScore >= 0.82) score += 0.08
+
+  return score
+}
+
+function makeEventCluster(signal) {
+  return {
+    sourceKeys: new Set([signal.row.canonicalKey]),
+    rows: [signal.row],
+    eventTypeVotes: [signal.eventType],
+    triggerVotes: [signal.trigger],
+    labelVotes: [signal.label],
+    summaryTokens: [signal.summaryToken],
+    subjectKeys: [...signal.subjectKeys],
+    objectKeys: [...signal.objectKeys],
+    locationVotes: signal.locationText ? [signal.locationText] : [],
+    timeVotes: signal.timeText ? [signal.timeText] : [],
+    eventType: signal.eventType,
+    trigger: signal.trigger,
+    label: signal.label,
+    summaryToken: signal.summaryToken,
+    locationText: signal.locationText,
+    timeText: signal.timeText
+  }
+}
+
+function mergeEventSignal(cluster, signal) {
+  cluster.sourceKeys.add(signal.row.canonicalKey)
+  cluster.rows.push(signal.row)
+  cluster.eventTypeVotes.push(signal.eventType)
+  cluster.triggerVotes.push(signal.trigger)
+  cluster.labelVotes.push(signal.label)
+  if (signal.summaryToken) cluster.summaryTokens.push(signal.summaryToken)
+  cluster.subjectKeys = dedupe([...cluster.subjectKeys, ...signal.subjectKeys]).sort()
+  cluster.objectKeys = dedupe([...cluster.objectKeys, ...signal.objectKeys]).sort()
+  if (signal.locationText) cluster.locationVotes.push(signal.locationText)
+  if (signal.timeText) cluster.timeVotes.push(signal.timeText)
+  cluster.eventType = pickMostFrequent(cluster.eventTypeVotes) || cluster.eventType
+  cluster.trigger = pickMostFrequent(cluster.triggerVotes) || cluster.trigger
+  cluster.label = pickMostFrequent(cluster.labelVotes) || cluster.label
+  cluster.summaryToken = pickMostFrequent(cluster.summaryTokens) || cluster.summaryToken
+  cluster.locationText = pickMostFrequent(cluster.locationVotes) || cluster.locationText
+  cluster.timeText = pickMostFrequent(cluster.timeVotes) || cluster.timeText
+}
+
+function clusterEventRows(eventRows = [], entityKeyAliasMap = new Map()) {
+  const clusters = []
+  const keyAliasMap = new Map()
+
+  for (const row of eventRows) {
+    const signal = buildEventSignal(row, entityKeyAliasMap)
+    if (!signal.label) continue
+
+    let bestCluster = null
+    let bestScore = 0
+    for (const cluster of clusters) {
+      const score = scoreEventCluster(cluster, signal)
+      if (score > bestScore) {
+        bestScore = score
+        bestCluster = cluster
+      }
+    }
+
+    if (!bestCluster || bestScore < 0.62) {
+      bestCluster = makeEventCluster(signal)
+      clusters.push(bestCluster)
+    } else {
+      mergeEventSignal(bestCluster, signal)
+    }
+  }
+
+  for (const cluster of clusters) {
+    const label = pickMostFrequent(cluster.rows.map(row => row.label))
+    const eventType = pickMostFrequent(cluster.rows.map(row => row.eventType)) || '一般事件'
+    const trigger = pickMostFrequent(cluster.rows.map(row => row.trigger)) || label
+    const timeText = pickMostFrequent(cluster.rows.map(row => row.timeText).filter(Boolean))
+    const locationText = pickMostFrequent(cluster.rows.map(row => row.locationText).filter(Boolean))
+    const subjectKeys = dedupe(cluster.rows.flatMap(row => parseJsonArray(row.subjectKeys)
+      .map(item => entityKeyAliasMap.get(item) || item))).sort()
+    const objectKeys = dedupe(cluster.rows.flatMap(row => parseJsonArray(row.objectKeys)
+      .map(item => entityKeyAliasMap.get(item) || item))).sort()
+    const finalKey = canonicalizeEventKey({
+      label,
+      eventType,
+      trigger,
+      subjectKeys,
+      objectKeys,
+      timeText,
+      locationText
+    })
+    cluster.finalKey = finalKey
+
+    for (const row of cluster.rows) {
+      keyAliasMap.set(row.canonicalKey, finalKey)
+    }
+  }
+
+  return { clusters, keyAliasMap }
+}
+
 export function makeStableId(prefix, value) {
   const digest = createHash('md5').update(String(value || '')).digest('hex').slice(0, 16)
   return `${prefix}_${digest}`
@@ -681,40 +1005,31 @@ export function buildKnowledgeRecords(
 }
 
 function aggregateEntityCanonicalRows(graphId, entityRows = [], now = Date.now()) {
-  const entityMap = new Map()
+  const { clusters, keyAliasMap } = clusterEntityRows(entityRows)
 
-  for (const row of entityRows) {
-    const key = String(row.canonicalKey || '').trim()
-    if (!key) continue
-
-    if (!entityMap.has(key)) {
-      entityMap.set(key, {
-        key,
-        labels: [],
-        entityTypes: [],
-        aliases: new Set(),
-        properties: {},
-        fileIds: new Set(),
-        fileNames: new Set(),
-        paragraphRefs: new Set(),
-        createdAt: Number(row.createdAt || now)
-      })
+  const canonicalEntities = clusters.map(cluster => {
+    const entry = {
+      key: cluster.finalKey,
+      labels: cluster.rows.map(row => row.mentionText),
+      entityTypes: cluster.rows.map(row => row.entityType),
+      aliases: new Set(cluster.rows.map(row => row.mentionText)),
+      properties: {},
+      fileIds: new Set(),
+      fileNames: new Set(),
+      paragraphRefs: new Set(),
+      createdAt: Math.min(...cluster.rows.map(row => Number(row.createdAt || now)))
     }
 
-    const entry = entityMap.get(key)
-    entry.labels.push(row.mentionText)
-    entry.entityTypes.push(row.entityType)
-    entry.aliases.add(row.mentionText)
-    entry.properties = mergeProperties(entry.properties, parseJson(row.properties, {}))
-    entry.fileIds.add(row.fileId)
-    if (row.fileName) entry.fileNames.add(row.fileName)
-    for (const paragraphIndex of parseJson(row.paragraphRefs, [])) {
-      entry.paragraphRefs.add(Number(paragraphIndex))
+    for (const row of cluster.rows) {
+      entry.properties = mergeProperties(entry.properties, parseJson(row.properties, {}))
+      entry.fileIds.add(row.fileId)
+      if (row.fileName) entry.fileNames.add(row.fileName)
+      entry.aliases.add(row.mentionText)
+      for (const paragraphIndex of parseJson(row.paragraphRefs, [])) {
+        entry.paragraphRefs.add(Number(paragraphIndex))
+      }
     }
-    entry.createdAt = Math.min(entry.createdAt, Number(row.createdAt || now))
-  }
 
-  return [...entityMap.values()].map(entry => {
     const label = pickMostFrequent(entry.labels)
     const entityType = pickMostFrequent(entry.entityTypes) || 'default'
     const supportCount = entry.fileIds.size
@@ -740,57 +1055,47 @@ function aggregateEntityCanonicalRows(graphId, entityRows = [], now = Date.now()
       sourceFile: [...entry.fileNames][0] || ''
     }
   })
+
+  return { canonicalEntities, keyAliasMap }
 }
 
-function aggregateEventCanonicalRows(graphId, eventRows = [], now = Date.now()) {
-  const eventMap = new Map()
+function aggregateEventCanonicalRows(graphId, eventRows = [], entityKeyAliasMap = new Map(), now = Date.now()) {
+  const { clusters, keyAliasMap } = clusterEventRows(eventRows, entityKeyAliasMap)
 
-  for (const row of eventRows) {
-    const key = String(row.canonicalKey || '').trim()
-    if (!key) continue
-
-    if (!eventMap.has(key)) {
-      eventMap.set(key, {
-        key,
-        labels: [],
-        eventTypes: [],
-        triggers: [],
-        predicateTexts: [],
-        summaries: [],
-        subjectKeys: new Set(),
-        objectKeys: new Set(),
-        timeTexts: [],
-        locationTexts: [],
-        aliases: new Set(),
-        properties: {},
-        fileIds: new Set(),
-        fileNames: new Set(),
-        paragraphRefs: new Set(),
-        createdAt: Number(row.createdAt || now)
-      })
+  const canonicalEvents = clusters.map(cluster => {
+    const entry = {
+      key: cluster.finalKey,
+      labels: cluster.rows.map(row => row.label),
+      eventTypes: cluster.rows.map(row => row.eventType),
+      triggers: cluster.rows.map(row => row.trigger),
+      predicateTexts: cluster.rows.map(row => row.predicateText),
+      summaries: cluster.rows.map(row => row.summary),
+      subjectKeys: new Set(),
+      objectKeys: new Set(),
+      timeTexts: [],
+      locationTexts: [],
+      aliases: new Set(cluster.rows.map(row => row.label)),
+      properties: {},
+      fileIds: new Set(),
+      fileNames: new Set(),
+      paragraphRefs: new Set(),
+      createdAt: Math.min(...cluster.rows.map(row => Number(row.createdAt || now)))
     }
 
-    const entry = eventMap.get(key)
-    entry.labels.push(row.label)
-    entry.eventTypes.push(row.eventType)
-    entry.triggers.push(row.trigger)
-    entry.predicateTexts.push(row.predicateText)
-    entry.summaries.push(row.summary)
-    entry.aliases.add(row.label)
-    entry.properties = mergeProperties(entry.properties, parseJson(row.properties, {}))
-    entry.fileIds.add(row.fileId)
-    if (row.fileName) entry.fileNames.add(row.fileName)
-    for (const subjectKey of parseJson(row.subjectKeys, [])) entry.subjectKeys.add(subjectKey)
-    for (const objectKey of parseJson(row.objectKeys, [])) entry.objectKeys.add(objectKey)
-    for (const paragraphIndex of parseJson(row.paragraphRefs, [])) {
-      entry.paragraphRefs.add(Number(paragraphIndex))
+    for (const row of cluster.rows) {
+      entry.properties = mergeProperties(entry.properties, parseJson(row.properties, {}))
+      entry.fileIds.add(row.fileId)
+      if (row.fileName) entry.fileNames.add(row.fileName)
+      entry.aliases.add(row.label)
+      for (const subjectKey of parseJson(row.subjectKeys, [])) entry.subjectKeys.add(entityKeyAliasMap.get(subjectKey) || subjectKey)
+      for (const objectKey of parseJson(row.objectKeys, [])) entry.objectKeys.add(entityKeyAliasMap.get(objectKey) || objectKey)
+      for (const paragraphIndex of parseJson(row.paragraphRefs, [])) {
+        entry.paragraphRefs.add(Number(paragraphIndex))
+      }
+      if (row.timeText) entry.timeTexts.push(row.timeText)
+      if (row.locationText) entry.locationTexts.push(row.locationText)
     }
-    if (row.timeText) entry.timeTexts.push(row.timeText)
-    if (row.locationText) entry.locationTexts.push(row.locationText)
-    entry.createdAt = Math.min(entry.createdAt, Number(row.createdAt || now))
-  }
 
-  return [...eventMap.values()].map(entry => {
     const label = pickMostFrequent(entry.labels)
     const eventType = pickMostFrequent(entry.eventTypes) || '一般事件'
     const trigger = pickMostFrequent(entry.triggers) || label
@@ -838,14 +1143,16 @@ function aggregateEventCanonicalRows(graphId, eventRows = [], now = Date.now()) 
       sourceFile: [...entry.fileNames][0] || ''
     }
   })
+
+  return { canonicalEvents, keyAliasMap }
 }
 
-function aggregateEdgeRows(graphId, relationRows = [], nodeIdByKey = new Map(), now = Date.now()) {
+function aggregateEdgeRows(graphId, relationRows = [], nodeIdByKey = new Map(), keyAliasMap = new Map(), now = Date.now()) {
   const edgeMap = new Map()
 
   for (const row of relationRows) {
-    const sourceKey = String(row.sourceKey || '').trim()
-    const targetKey = String(row.targetKey || '').trim()
+    const sourceKey = keyAliasMap.get(String(row.sourceKey || '').trim()) || String(row.sourceKey || '').trim()
+    const targetKey = keyAliasMap.get(String(row.targetKey || '').trim()) || String(row.targetKey || '').trim()
     const label = normalizeRelationLabel(row.label)
     if (!sourceKey || !targetKey) continue
     if (!nodeIdByKey.has(sourceKey) || !nodeIdByKey.has(targetKey)) continue
@@ -930,8 +1237,9 @@ export function rebuildCanonicalGraph(graphId, allRows, run) {
     [graphId]
   )
 
-  const canonicalEntities = aggregateEntityCanonicalRows(graphId, entityRows, now)
-  const canonicalEvents = aggregateEventCanonicalRows(graphId, eventRows, now)
+  const { canonicalEntities, keyAliasMap: entityKeyAliasMap } = aggregateEntityCanonicalRows(graphId, entityRows, now)
+  const { canonicalEvents, keyAliasMap: eventKeyAliasMap } = aggregateEventCanonicalRows(graphId, eventRows, entityKeyAliasMap, now)
+  const keyAliasMap = new Map([...entityKeyAliasMap.entries(), ...eventKeyAliasMap.entries()])
   const nodeIdByKey = new Map()
 
   run('DELETE FROM canonical_entities WHERE graphId = ?', [graphId])
@@ -1020,7 +1328,7 @@ export function rebuildCanonicalGraph(graphId, allRows, run) {
     )
   }
 
-  const edges = aggregateEdgeRows(graphId, relationRows, nodeIdByKey, now)
+  const edges = aggregateEdgeRows(graphId, relationRows, nodeIdByKey, keyAliasMap, now)
   for (const edge of edges) {
     run(
       `
