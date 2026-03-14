@@ -1,16 +1,48 @@
 import { useGraphStore } from '@/stores/graphStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useRagStore } from '@/stores/ragStore'
+import { fetchMessages } from '@/services/apiClient'
 import { retrieveContext } from '@/services/ragRetriever'
 import { callLLM, buildRAGMessages, sanitizeRAGAnswer } from '@/services/llmApiService'
 
 const PLACEHOLDER_TITLES = new Set(['默认会话', '新会话', '开始对话'])
+const refreshingSessionIds = new Set()
 
-async function maybeGenerateSessionTitle(settings, ragStore, query, answer) {
-  const sessionId = ragStore.currentSessionId
-  const currentTitle = ragStore.currentSession?.title?.trim()
-  if (!sessionId || (currentTitle && !PLACEHOLDER_TITLES.has(currentTitle))) return
+function isPlaceholderTitle(title) {
+  return !title || PLACEHOLDER_TITLES.has(String(title).trim())
+}
 
+function buildFallbackTitle(query) {
+  return String(query || '')
+    .replace(/[？?！!。，“”"'：:、,.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 14) || '研究对话'
+}
+
+function normalizeTitle(title, query) {
+  const cleaned = String(title || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[？?！!。，“”"'：:、,.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (
+    !cleaned ||
+    cleaned.length < 2 ||
+    cleaned.length > 18 ||
+    cleaned.includes('抱歉') ||
+    cleaned.includes('请提供') ||
+    cleaned.includes('用户') ||
+    cleaned.includes('问题')
+  ) {
+    return buildFallbackTitle(query)
+  }
+
+  return cleaned
+}
+
+async function generateSessionTitle(settings, query, answer) {
   try {
     const title = (await callLLM(
       { ...settings, temperature: 0.2, maxTokens: 32 },
@@ -21,16 +53,15 @@ async function maybeGenerateSessionTitle(settings, ragStore, query, answer) {
         },
         {
           role: 'user',
-          content: `问题：${query}\n回答：${answer}`
+          content: `问题：${query}\n回答：${answer || '无'}`
         }
       ]
     )).replace(/[\r\n]/g, '').trim()
 
-    if (title) {
-      await ragStore.renameSession(sessionId, title.slice(0, 18))
-    }
+    return normalizeTitle(title, query)
   } catch (error) {
-    console.warn('[useRagQuery] failed to generate session title:', error.message)
+    console.warn('[useRagQuery] failed to generate title, fallback to query:', error.message)
+    return buildFallbackTitle(query)
   }
 }
 
@@ -38,6 +69,32 @@ export function useRagQuery() {
   const graphStore = useGraphStore()
   const settings = useSettingsStore()
   const ragStore = useRagStore()
+
+  async function refreshSessionTitle(session, prefetchedMessages = null) {
+    if (!session?.id || !isPlaceholderTitle(session.title) || refreshingSessionIds.has(session.id)) return
+
+    refreshingSessionIds.add(session.id)
+    try {
+      const messages = prefetchedMessages || await fetchMessages(session.id)
+      const firstUser = messages.find(item => item.role === 'user' && item.content?.trim())
+      if (!firstUser) return
+
+      const firstAssistant = messages.find(item => item.role === 'assistant' && item.content?.trim())
+      const title = await generateSessionTitle(settings, firstUser.content, firstAssistant?.content || '')
+      if (title) {
+        await ragStore.renameSession(session.id, title.slice(0, 18))
+      }
+    } finally {
+      refreshingSessionIds.delete(session.id)
+    }
+  }
+
+  async function refreshWorkspaceSessionTitles() {
+    for (const session of ragStore.sessions) {
+      if (!isPlaceholderTitle(session.title)) continue
+      await refreshSessionTitle(session)
+    }
+  }
 
   async function askQuestion(query) {
     if (!query.trim()) return
@@ -50,7 +107,14 @@ export function useRagQuery() {
       ragStore.setLastContext(context)
 
       if (!context) {
-        await ragStore.addMessage('assistant', '现有图谱和文档里没有找到与这个问题直接相关的证据。')
+        const assistantMessage = await ragStore.addMessage('assistant', '现有图谱和文档里没有找到与这个问题直接相关的证据。')
+        await refreshSessionTitle(ragStore.currentSession, [
+          { role: 'user', content: query },
+          { role: 'assistant', content: '现有图谱和文档里没有找到与这个问题直接相关的证据。' }
+        ])
+        if (assistantMessage?.id) {
+          ragStore.selectMessage(assistantMessage.id)
+        }
         return
       }
 
@@ -60,7 +124,10 @@ export function useRagQuery() {
       const answer = sanitizeRAGAnswer(await callLLM(settings, messages))
 
       const assistantMessage = await ragStore.addMessage('assistant', answer, context)
-      await maybeGenerateSessionTitle(settings, ragStore, query, answer)
+      await refreshSessionTitle(ragStore.currentSession, [
+        { role: 'user', content: query },
+        { role: 'assistant', content: answer }
+      ])
 
       if (assistantMessage?.id) {
         ragStore.selectMessage(assistantMessage.id)
@@ -72,5 +139,9 @@ export function useRagQuery() {
     }
   }
 
-  return { askQuestion }
+  return {
+    askQuestion,
+    refreshSessionTitle,
+    refreshWorkspaceSessionTitles
+  }
 }

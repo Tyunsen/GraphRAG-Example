@@ -165,12 +165,18 @@ export const useRagStore = defineStore('rag', () => {
   }
 
   async function deleteSession(sessionId) {
+    const graphId = graphStore.currentGraphId
     await deleteSessionApi(sessionId)
     sessions.value = sessions.value.filter(item => item.id !== sessionId)
 
+    if (sessions.value.length === 0 && graphId) {
+      await createSession('新会话')
+      return
+    }
+
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = sessions.value[0]?.id || null
-      persistStoredSession(graphStore.currentGraphId, currentSessionId.value)
+      persistStoredSession(graphId, currentSessionId.value)
       await loadMessagesForSession(currentSessionId.value)
     }
   }

@@ -15,10 +15,11 @@
       @change="onFileSelect"
       style="display: none"
     />
+
     <div class="file-importer-content">
-      <div class="file-importer-title">{{ disabled ? '先选择工作区并设置总意图' : '上传到当前工作区' }}</div>
+      <div class="file-importer-title">{{ disabled ? '先补工作区意图' : '上传文件' }}</div>
       <div class="file-importer-desc">
-        {{ disabled ? '没有总意图时，系统不会开始抽取。' : '拖拽文件到这里，或点击选择文档。上传后会基于当前工作区意图抽取图谱。' }}
+        {{ disabled ? '没有总意图时，系统不会开始抽取。' : '拖拽到这里，或点击选择文件。' }}
       </div>
       <div class="file-importer-meta">支持 JSON / CSV / TXT / MD / PDF</div>
     </div>
@@ -73,32 +74,38 @@ function onFileSelect(event) {
   transition: all 0.2s ease;
   background: rgba(79, 109, 245, 0.04);
 }
+
 .file-importer:hover,
 .file-importer.dragging {
   border-color: var(--color-primary);
   background: rgba(79, 109, 245, 0.08);
 }
+
 .file-importer.disabled {
   cursor: not-allowed;
   opacity: 0.72;
   border-color: var(--color-border);
   background: rgba(241, 245, 249, 0.8);
 }
+
 .file-importer-content {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
+
 .file-importer-title {
   font-size: 13px;
   font-weight: 700;
 }
+
 .file-importer-desc,
 .file-importer-meta {
   font-size: 12px;
   line-height: 1.55;
   color: var(--color-text-secondary);
 }
+
 .file-importer-meta {
   font-size: 11px;
   color: var(--color-text-muted);

@@ -25,27 +25,28 @@
       <div v-if="activePanel === 'chat'" class="workspace-nav-section">
         <div class="section-head">
           <div class="section-title">会话</div>
-          <button class="section-action" @click="ragStore.createSession()">新建</button>
+          <button class="section-action" @click="ragStore.createSession()">新对话</button>
         </div>
 
         <div v-if="ragStore.sessions.length === 0" class="section-empty">还没有会话</div>
         <div v-else class="session-list">
-          <button
+          <div
             v-for="session in ragStore.sessions"
             :key="session.id"
             class="session-item"
             :class="{ active: ragStore.currentSessionId === session.id }"
-            @click="ragStore.switchSession(session.id)"
           >
-            <span class="session-title">{{ displaySessionTitle(session.title) }}</span>
-          </button>
+            <button class="session-main" @click="ragStore.switchSession(session.id)">
+              <span class="session-title">{{ displaySessionTitle(session.title) }}</span>
+            </button>
+            <button class="session-delete" title="删除会话" @click="removeSession(session.id)">删除</button>
+          </div>
         </div>
       </div>
 
       <div v-else class="workspace-nav-section">
         <div class="section-head">
           <div class="section-title">文件</div>
-          <button class="section-action" @click="$emit('update:activePanel', 'files')">打开</button>
         </div>
 
         <div class="file-summary-list">
@@ -68,8 +69,10 @@
 </template>
 
 <script setup>
+import { watch } from 'vue'
 import { useGraphStore } from '@/stores/graphStore'
 import { useRagStore } from '@/stores/ragStore'
+import { useRagQuery } from '@/composables/useRagQuery'
 
 defineProps({
   activePanel: { type: String, required: true }
@@ -79,11 +82,25 @@ defineEmits(['update:activePanel'])
 
 const graphStore = useGraphStore()
 const ragStore = useRagStore()
+const { refreshWorkspaceSessionTitles } = useRagQuery()
+
+watch(
+  () => [graphStore.currentGraphId, ragStore.sessions.length],
+  async ([graphId]) => {
+    if (!graphId || ragStore.sessions.length === 0) return
+    await refreshWorkspaceSessionTitles()
+  },
+  { immediate: true }
+)
 
 function displaySessionTitle(title) {
   const value = title?.trim()
   if (!value || value === '默认会话' || value === '新会话') return '开始对话'
   return value
+}
+
+async function removeSession(sessionId) {
+  await ragStore.deleteSession(sessionId)
 }
 </script>
 
@@ -203,13 +220,13 @@ function displaySessionTitle(title) {
 }
 
 .session-item {
-  width: 100%;
-  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   border-radius: 12px;
-  text-align: left;
   background: rgba(255, 255, 255, 0.84);
   border: 1px solid transparent;
-  color: var(--color-text-secondary);
+  padding: 4px;
 }
 
 .session-item:hover {
@@ -220,12 +237,32 @@ function displaySessionTitle(title) {
 .session-item.active {
   background: rgba(79, 109, 245, 0.08);
   border-color: rgba(79, 109, 245, 0.28);
+}
+
+.session-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 8px;
   color: var(--color-text);
 }
 
 .session-title {
+  display: block;
   font-size: 12px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-delete {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(254, 242, 242, 0.92);
+  color: var(--color-danger);
+  font-size: 11px;
 }
 
 .file-summary-list {

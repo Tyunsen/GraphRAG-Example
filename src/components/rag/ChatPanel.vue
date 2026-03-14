@@ -2,13 +2,6 @@
   <div class="chat-panel">
     <div class="chat-thread-header">
       <div class="chat-thread-title">{{ displayTitle }}</div>
-      <button
-        v-if="ragStore.messages.length > 0"
-        class="clear-thread-btn"
-        @click="ragStore.clearMessages()"
-      >
-        清空
-      </button>
     </div>
 
     <div class="chat-thread-card">
@@ -115,7 +108,6 @@ watch(inputText, () => {
 .chat-thread-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
 }
 
@@ -123,15 +115,6 @@ watch(inputText, () => {
   font-size: 18px;
   font-weight: 700;
   line-height: 1.4;
-}
-
-.clear-thread-btn {
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(79, 109, 245, 0.1);
-  color: var(--color-primary);
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .chat-thread-card {
