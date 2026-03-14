@@ -127,6 +127,31 @@ async function initDB() {
       importedAt INTEGER NOT NULL
     )
   `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS file_nodes (
+      id TEXT PRIMARY KEY,
+      graphId TEXT NOT NULL,
+      fileId TEXT NOT NULL,
+      fileName TEXT NOT NULL,
+      nodeLabel TEXT NOT NULL,
+      nodeType TEXT DEFAULT 'default',
+      nodeProperties TEXT DEFAULT '{}',
+      createdAt INTEGER NOT NULL
+    )
+  `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS file_edges (
+      id TEXT PRIMARY KEY,
+      graphId TEXT NOT NULL,
+      fileId TEXT NOT NULL,
+      fileName TEXT NOT NULL,
+      sourceLabel TEXT NOT NULL,
+      targetLabel TEXT NOT NULL,
+      label TEXT DEFAULT '',
+      edgeProperties TEXT DEFAULT '{}',
+      createdAt INTEGER NOT NULL
+    )
+  `)
 
   // Create indexes (IF NOT EXISTS is not supported for indexes in sql.js, use try/catch)
   const indexes = [
@@ -139,6 +164,10 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_files_graphId ON files(graphId)',
     'CREATE INDEX IF NOT EXISTS idx_file_chunks_graphId ON file_chunks(graphId)',
     'CREATE INDEX IF NOT EXISTS idx_file_chunks_fileId ON file_chunks(fileId)',
+    'CREATE INDEX IF NOT EXISTS idx_file_nodes_graphId ON file_nodes(graphId)',
+    'CREATE INDEX IF NOT EXISTS idx_file_nodes_fileId ON file_nodes(fileId)',
+    'CREATE INDEX IF NOT EXISTS idx_file_edges_graphId ON file_edges(graphId)',
+    'CREATE INDEX IF NOT EXISTS idx_file_edges_fileId ON file_edges(fileId)',
   ]
   for (const sql of indexes) {
     try { db.run(sql) } catch { /* index may already exist */ }

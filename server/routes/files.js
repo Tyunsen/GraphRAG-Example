@@ -1,5 +1,7 @@
 import { Router } from 'express'
 import { getDB, saveToDisk } from '../db.js'
+import { syncWorkspaceGraph } from '../graphdb.js'
+import { createHash } from 'crypto'
 
 const router = Router()
 
@@ -23,6 +25,194 @@ function getRow(sql, params = []) {
 function run(sql, params = []) {
   const db = getDB()
   db.run(sql, params)
+}
+
+function normalizeLabel(value = '') {
+  return String(value).trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function makeStableId(prefix, value) {
+  const digest = createHash('md5').update(String(value)).digest('hex').slice(0, 16)
+  return `${prefix}_${digest}`
+}
+
+function aggregateGraphFromFileRecords(graphId) {
+  const fileNodes = allRows(
+    `
+    SELECT fileId, fileName, nodeLabel, nodeType, nodeProperties, createdAt
+    FROM file_nodes
+    WHERE graphId = ?
+    ORDER BY createdAt ASC
+    `,
+    [graphId]
+  )
+  const fileEdges = allRows(
+    `
+    SELECT fileId, fileName, sourceLabel, targetLabel, label, edgeProperties, createdAt
+    FROM file_edges
+    WHERE graphId = ?
+    ORDER BY createdAt ASC
+    `,
+    [graphId]
+  )
+
+  const nodeMap = new Map()
+  for (const node of fileNodes) {
+    const normalized = normalizeLabel(node.nodeLabel)
+    if (!normalized) continue
+
+    const properties = parseJson(node.nodeProperties, {})
+    if (!nodeMap.has(normalized)) {
+      nodeMap.set(normalized, {
+        id: makeStableId('n', normalized),
+        label: node.nodeLabel,
+        type: node.nodeType || 'default',
+        properties,
+        sourceFile: node.fileName || '',
+        createdAt: node.createdAt || Date.now()
+      })
+      continue
+    }
+
+    const existing = nodeMap.get(normalized)
+    existing.properties = { ...existing.properties, ...properties }
+    if ((!existing.type || existing.type === 'default') && node.nodeType) {
+      existing.type = node.nodeType
+    }
+  }
+
+  const edgeMap = new Map()
+  for (const edge of fileEdges) {
+    const sourceKey = normalizeLabel(edge.sourceLabel)
+    const targetKey = normalizeLabel(edge.targetLabel)
+    if (!sourceKey || !targetKey) continue
+
+    if (!nodeMap.has(sourceKey)) {
+      nodeMap.set(sourceKey, {
+        id: makeStableId('n', sourceKey),
+        label: edge.sourceLabel,
+        type: 'default',
+        properties: {},
+        sourceFile: edge.fileName || '',
+        createdAt: edge.createdAt || Date.now()
+      })
+    }
+    if (!nodeMap.has(targetKey)) {
+      nodeMap.set(targetKey, {
+        id: makeStableId('n', targetKey),
+        label: edge.targetLabel,
+        type: 'default',
+        properties: {},
+        sourceFile: edge.fileName || '',
+        createdAt: edge.createdAt || Date.now()
+      })
+    }
+
+    const sourceId = nodeMap.get(sourceKey).id
+    const targetId = nodeMap.get(targetKey).id
+    const relationLabel = String(edge.label || '').trim()
+    const aggregateKey = `${sourceKey}|${targetKey}|${relationLabel}`
+
+    if (!edgeMap.has(aggregateKey)) {
+      edgeMap.set(aggregateKey, {
+        id: makeStableId('e', aggregateKey),
+        source: sourceId,
+        target: targetId,
+        label: relationLabel,
+        weight: 1,
+        properties: parseJson(edge.edgeProperties, {}),
+        sourceFile: edge.fileName || '',
+        createdAt: edge.createdAt || Date.now()
+      })
+      continue
+    }
+
+    const existing = edgeMap.get(aggregateKey)
+    existing.weight += 1
+  }
+
+  return {
+    nodes: Array.from(nodeMap.values()),
+    edges: Array.from(edgeMap.values())
+  }
+}
+
+function hasCompleteFileGraphRecords(graphId, excludedFileId = null) {
+  const files = allRows(
+    'SELECT id FROM files WHERE graphId = ?' + (excludedFileId ? ' AND id != ?' : ''),
+    excludedFileId ? [graphId, excludedFileId] : [graphId]
+  )
+  if (files.length === 0) return true
+
+  const nodeBackedIds = new Set(
+    allRows('SELECT DISTINCT fileId FROM file_nodes WHERE graphId = ?', [graphId]).map(row => row.fileId)
+  )
+
+  return files.every(file => nodeBackedIds.has(file.id))
+}
+
+function persistAggregatedGraph(graphId, graphData) {
+  run('DELETE FROM nodes WHERE graphId = ?', [graphId])
+  run('DELETE FROM edges WHERE graphId = ?', [graphId])
+
+  for (const node of graphData.nodes) {
+    run(
+      `
+      INSERT OR REPLACE INTO nodes (id, graphId, label, type, properties, sourceFile, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        node.id,
+        graphId,
+        node.label,
+        node.type || 'default',
+        JSON.stringify(node.properties || {}),
+        node.sourceFile || '',
+        node.createdAt || Date.now()
+      ]
+    )
+  }
+
+  for (const edge of graphData.edges) {
+    run(
+      `
+      INSERT OR REPLACE INTO edges (id, graphId, source, target, label, weight, properties, sourceFile, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        edge.id,
+        graphId,
+        edge.source,
+        edge.target,
+        edge.label || '',
+        edge.weight || 1,
+        JSON.stringify(edge.properties || {}),
+        edge.sourceFile || '',
+        edge.createdAt || Date.now()
+      ]
+    )
+  }
+
+  run(
+    'UPDATE graphs SET nodeCount = ?, edgeCount = ?, updatedAt = ? WHERE id = ?',
+    [graphData.nodes.length, graphData.edges.length, Date.now(), graphId]
+  )
+}
+
+async function rebuildGraphDb(graphId) {
+  const workspace = getRow('SELECT * FROM graphs WHERE id = ?', [graphId])
+  if (!workspace) return
+
+  const nodes = allRows('SELECT * FROM nodes WHERE graphId = ?', [graphId]).map(node => ({
+    ...node,
+    properties: parseJson(node.properties, {})
+  }))
+  const edges = allRows('SELECT * FROM edges WHERE graphId = ?', [graphId]).map(edge => ({
+    ...edge,
+    properties: parseJson(edge.properties, {})
+  }))
+
+  await syncWorkspaceGraph(workspace, nodes, edges)
 }
 
 function parseJson(value, fallback) {
@@ -131,7 +321,8 @@ router.post('/:graphId', (req, res) => {
       content,
       fileType,
       fileSize,
-      nodes = []
+      nodes = [],
+      edges = []
     } = req.body || {}
 
     if (!id || !fileName || !content) {
@@ -169,8 +360,114 @@ router.post('/:graphId', (req, res) => {
       )
     })
 
+    run('DELETE FROM file_nodes WHERE graphId = ? AND fileId = ?', [req.params.graphId, id])
+    run('DELETE FROM file_edges WHERE graphId = ? AND fileId = ?', [req.params.graphId, id])
+
+    nodes.forEach((node, index) => {
+      run(
+        `
+        INSERT INTO file_nodes (id, graphId, fileId, fileName, nodeLabel, nodeType, nodeProperties, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          `${id}_node_${index + 1}`,
+          req.params.graphId,
+          id,
+          fileName,
+          node.label || '',
+          node.type || 'default',
+          JSON.stringify(node.properties || {}),
+          now
+        ]
+      )
+    })
+
+    edges.forEach((edge, index) => {
+      run(
+        `
+        INSERT INTO file_edges (id, graphId, fileId, fileName, sourceLabel, targetLabel, label, edgeProperties, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          `${id}_edge_${index + 1}`,
+          req.params.graphId,
+          id,
+          fileName,
+          edge.source || '',
+          edge.target || '',
+          edge.label || '',
+          JSON.stringify(edge.properties || {}),
+          now
+        ]
+      )
+    })
+
     saveToDisk()
     res.json({ success: true, id, paragraphCount: paragraphs.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+router.delete('/:graphId/detail/:fileId', async (req, res) => {
+  try {
+    const { graphId, fileId } = req.params
+    const file = getRow(
+      'SELECT id, graphId, fileName FROM files WHERE id = ? AND graphId = ?',
+      [fileId, graphId]
+    )
+
+    if (!file) return res.status(404).json({ error: 'File not found' })
+
+    run('DELETE FROM file_chunks WHERE fileId = ?', [fileId])
+    run('DELETE FROM files WHERE id = ? AND graphId = ?', [fileId, graphId])
+    run('DELETE FROM file_nodes WHERE graphId = ? AND fileId = ?', [graphId, fileId])
+    run('DELETE FROM file_edges WHERE graphId = ? AND fileId = ?', [graphId, fileId])
+    run('DELETE FROM import_history WHERE graphId = ? AND fileName = ?', [graphId, file.fileName])
+
+    if (hasCompleteFileGraphRecords(graphId)) {
+      persistAggregatedGraph(graphId, aggregateGraphFromFileRecords(graphId))
+    } else {
+      run('DELETE FROM edges WHERE graphId = ? AND sourceFile = ?', [graphId, file.fileName])
+
+      const remainingEdges = allRows('SELECT source, target FROM edges WHERE graphId = ?', [graphId])
+      const connectedNodes = new Set()
+      for (const edge of remainingEdges) {
+        connectedNodes.add(edge.source)
+        connectedNodes.add(edge.target)
+      }
+
+      const fileNodes = allRows(
+        'SELECT id, label FROM nodes WHERE graphId = ? AND sourceFile = ?',
+        [graphId, file.fileName]
+      )
+      for (const node of fileNodes) {
+        const supportedElsewhere = allRows(
+          `
+          SELECT 1
+          FROM file_chunks
+          WHERE graphId = ? AND fileId != ? AND (linkedNodes LIKE ? OR linkedEvents LIKE ?)
+          LIMIT 1
+          `,
+          [graphId, fileId, `%\"${node.label}\"%`, `%\"${node.label}\"%`]
+        ).length > 0
+
+        if (!connectedNodes.has(node.id) && !supportedElsewhere) {
+          run('DELETE FROM nodes WHERE id = ? AND graphId = ?', [node.id, graphId])
+        }
+      }
+
+      const nodeCount = getRow('SELECT COUNT(*) as count FROM nodes WHERE graphId = ?', [graphId])
+      const edgeCount = getRow('SELECT COUNT(*) as count FROM edges WHERE graphId = ?', [graphId])
+      run(
+        'UPDATE graphs SET nodeCount = ?, edgeCount = ?, updatedAt = ? WHERE id = ?',
+        [nodeCount?.count || 0, edgeCount?.count || 0, Date.now(), graphId]
+      )
+    }
+
+    saveToDisk()
+    await rebuildGraphDb(graphId)
+    res.json({ success: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

@@ -10,14 +10,66 @@
       @files-selected="onFilesSelected"
     />
 
-    <div v-if="extracting" class="status-card status-info">
-      <span class="status-spinner"></span>
-      <span>正在按工作区意图抽取实体、事件和关系。</span>
-    </div>
-    <div v-else-if="parsing" class="status-card">正在解析文件内容...</div>
-    <div v-if="parseError" class="status-card status-error">{{ parseError }}</div>
+    <div v-if="importStore.hasActivity" class="process-card">
+      <div class="process-head">
+        <div>
+          <div class="process-title">导入进度</div>
+          <div class="process-file">{{ importStore.currentFileName || '等待文件' }}</div>
+        </div>
+        <button class="process-clear" @click="importStore.clearProcess()">清除</button>
+      </div>
 
-    <ImportPreview :result="lastResult" @confirm="confirmAndRefresh" @cancel="cancelImport" />
+      <div class="progress-copy">
+        <div class="progress-label">{{ progressLabel }}</div>
+        <div class="progress-value">{{ progressPercent }}%</div>
+      </div>
+
+      <div class="progress-track">
+        <div class="progress-bar" :class="{ error: Boolean(importStore.parseError) }" :style="{ width: `${progressPercent}%` }"></div>
+      </div>
+
+      <div class="stage-pills">
+        <div
+          v-for="stage in importStore.stages"
+          :key="stage.key"
+          class="stage-pill"
+          :class="`stage-${stage.status}`"
+        >
+          <span class="stage-pill-dot"></span>
+          <span>{{ stage.label }}</span>
+        </div>
+      </div>
+
+      <div v-if="activeStageDetail" class="progress-detail">{{ activeStageDetail }}</div>
+
+      <div v-if="importStore.extractionSummary" class="summary-card">
+        <div class="summary-line">
+          <span>方式</span>
+          <strong>{{ importStore.extractionSummary.method }}</strong>
+        </div>
+        <div class="summary-line">
+          <span>结果</span>
+          <strong>{{ importStore.extractionSummary.nodeCount }} 节点 · {{ importStore.extractionSummary.edgeCount }} 关系</strong>
+        </div>
+        <div v-if="importStore.extractionSummary.entityLabels.length" class="summary-tags">
+          <span v-for="label in importStore.extractionSummary.entityLabels" :key="label" class="summary-tag">{{ label }}</span>
+        </div>
+        <div v-if="importStore.extractionSummary.eventLabels.length" class="summary-tags">
+          <span v-for="label in importStore.extractionSummary.eventLabels" :key="label" class="summary-tag summary-tag-event">{{ label }}</span>
+        </div>
+      </div>
+
+      <details v-if="importStore.processLogs.length" class="process-details">
+        <summary>查看详细过程</summary>
+        <div class="log-list">
+          <div v-for="line in importStore.processLogs" :key="line" class="log-line">{{ line }}</div>
+        </div>
+      </details>
+    </div>
+
+    <div v-if="importStore.parseError" class="status-card status-error">{{ importStore.parseError }}</div>
+
+    <ImportPreview :result="importStore.lastResult" @confirm="confirmAndRefresh" @cancel="importStore.cancelImport" />
 
     <div class="file-list-card">
       <div class="file-list-title">已上传文件</div>
@@ -31,7 +83,7 @@
               {{ formatFileSize(file.fileSize) }} · {{ formatTime(file.importedAt) }}
             </div>
           </div>
-          <button class="file-row-delete" @click="removeFile(file.id)">移除</button>
+          <button class="file-row-delete" @click="removeFile(file)">移除</button>
         </div>
       </div>
     </div>
@@ -39,32 +91,90 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { deleteFileApi, fetchFiles } from '@/services/apiClient'
-import { useFileParser } from '@/composables/useFileParser'
 import { useGraphStore } from '@/stores/graphStore'
+import { useImportStore } from '@/stores/importStore'
 import FileImporter from '@/components/import/FileImporter.vue'
 import ImportPreview from '@/components/import/ImportPreview.vue'
 
 const graphStore = useGraphStore()
+const importStore = useImportStore()
 const workspaceFiles = ref([])
 const filesLoading = ref(false)
-const { parsing, extracting, parseError, lastResult, parseFile, confirmImport, cancelImport } = useFileParser()
+
+const progressPercent = computed(() => {
+  const stages = importStore.stages
+  if (!stages.length) return 0
+
+  const total = stages.length
+  let progress = 0
+
+  stages.forEach((stage, index) => {
+    if (stage.status === 'done') {
+      progress += 1
+      return
+    }
+    if (stage.status === 'running') {
+      progress += 0.55
+      return
+    }
+    if (stage.status === 'ready') {
+      progress += 0.82
+      return
+    }
+    if (stage.status === 'error') {
+      progress = Math.max(progress, index + 0.35)
+    }
+  })
+
+  return Math.min(100, Math.max(0, Math.round((progress / total) * 100)))
+})
+
+const progressLabel = computed(() => {
+  if (importStore.parseError) return '处理失败'
+  const running = importStore.currentStage
+  if (running) return `正在${running.label}`
+  const ready = importStore.stages.find(item => item.status === 'ready')
+  if (ready) return '等待确认导入'
+  const done = importStore.stages.every(item => item.status === 'done' || item.status === 'idle')
+  if (done && importStore.processLogs.length) return '导入完成'
+  return '等待处理'
+})
+
+const activeStageDetail = computed(() => {
+  const running = importStore.currentStage
+  if (running?.detail) return running.detail
+  const ready = importStore.stages.find(item => item.status === 'ready' && item.detail)
+  if (ready) return ready.detail
+  const lastDone = [...importStore.stages].reverse().find(item => item.status === 'done' && item.detail)
+  return lastDone?.detail || ''
+})
 
 watch(() => graphStore.currentGraphId, refreshFiles, { immediate: true })
 
 async function onFilesSelected(files) {
-  for (const file of files) {
+  const selectedFiles = Array.from(files || [])
+  if (selectedFiles.length === 0) return
+
+  if (selectedFiles.length === 1) {
     try {
-      await parseFile(file)
+      await importStore.parseFile(selectedFiles[0])
     } catch {
       // parseError already captures the user-visible message.
     }
+    return
+  }
+
+  await importStore.importFiles(selectedFiles, { autoConfirm: true })
+  await refreshFiles()
+  if (graphStore.currentGraphId) {
+    await graphStore.loadGraph(graphStore.currentGraphId)
   }
 }
 
 async function confirmAndRefresh() {
-  await confirmImport()
+  await importStore.confirmImport()
   await refreshFiles()
 }
 
@@ -84,8 +194,10 @@ async function refreshFiles() {
   }
 }
 
-async function removeFile(fileId) {
-  await deleteFileApi(fileId)
+async function removeFile(file) {
+  if (!graphStore.currentGraphId) return
+  await deleteFileApi(graphStore.currentGraphId, file.id)
+  await graphStore.loadGraph(graphStore.currentGraphId)
   await refreshFiles()
 }
 
@@ -134,6 +246,197 @@ function formatFileSize(size) {
   font-weight: 600;
 }
 
+.process-card,
+.file-list-card,
+.summary-card {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.process-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.process-title,
+.file-list-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.process-file {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.process-clear {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(241, 245, 249, 0.96);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.progress-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.progress-value {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.progress-track {
+  margin-top: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.9);
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4f6df5, #2f9ef5);
+  transition: width 0.24s ease;
+}
+
+.progress-bar.error {
+  background: linear-gradient(90deg, #ef4444, #f97316);
+}
+
+.stage-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.stage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.9);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.stage-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.6);
+}
+
+.stage-running {
+  background: rgba(79, 109, 245, 0.1);
+  color: var(--color-primary);
+}
+
+.stage-running .stage-pill-dot {
+  background: var(--color-primary);
+}
+
+.stage-done,
+.stage-ready {
+  background: rgba(22, 163, 74, 0.1);
+  color: #15803d;
+}
+
+.stage-done .stage-pill-dot,
+.stage-ready .stage-pill-dot {
+  background: #16a34a;
+}
+
+.stage-error {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--color-danger);
+}
+
+.stage-error .stage-pill-dot {
+  background: var(--color-danger);
+}
+
+.progress-detail {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.7;
+}
+
+.summary-card {
+  margin-top: 14px;
+}
+
+.summary-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.summary-tag {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(79, 109, 245, 0.08);
+  color: var(--color-primary);
+  font-size: 11px;
+}
+
+.summary-tag-event {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+
+.process-details {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.process-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.log-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.log-line {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
 .status-card {
   padding: 10px 12px;
   border-radius: 12px;
@@ -143,39 +446,10 @@ function formatFileSize(size) {
   color: var(--color-text-secondary);
 }
 
-.status-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--color-primary);
-}
-
 .status-error {
   color: var(--color-danger);
   background: rgba(254, 242, 242, 0.9);
   border-color: rgba(252, 165, 165, 0.7);
-}
-
-.status-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(79, 109, 245, 0.18);
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.file-list-card {
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-}
-
-.file-list-title {
-  font-size: 13px;
-  font-weight: 700;
-  margin-bottom: 10px;
 }
 
 .file-list-empty {
@@ -187,6 +461,7 @@ function formatFileSize(size) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin-top: 10px;
 }
 
 .file-row {
@@ -228,11 +503,5 @@ function formatFileSize(size) {
   background: rgba(254, 242, 242, 0.92);
   color: var(--color-danger);
   font-size: 11px;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 </style>

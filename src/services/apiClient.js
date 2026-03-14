@@ -117,8 +117,8 @@ export async function saveFileContent(graphId, fileData) {
   })
 }
 
-export async function deleteFileApi(fileId) {
-  return request(`/files/detail/${fileId}`, {
+export async function deleteFileApi(graphId, fileId) {
+  return request(`/files/${graphId}/detail/${fileId}`, {
     method: 'DELETE'
   })
 }
