@@ -1259,7 +1259,7 @@ function aggregateEventCanonicalRowsSafe(graphId, eventRows = [], entityKeyAlias
     }
 
     return {
-      id: makeStableId('cv', entry.key),
+      id: makeStableId('cv', `${graphId}|${entry.key}`),
       graphId,
       canonicalKey: entry.key,
       label,
@@ -1276,7 +1276,7 @@ function aggregateEventCanonicalRowsSafe(graphId, eventRows = [], entityKeyAlias
       supportCount,
       createdAt: entry.createdAt,
       updatedAt: now,
-      nodeId: makeStableId('n', entry.key),
+      nodeId: makeStableId('n', `${graphId}|${entry.key}`),
       sourceFile: [...entry.fileNames][0] || ''
     }
   })

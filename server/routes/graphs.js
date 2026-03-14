@@ -137,6 +137,51 @@ function reconcileWorkspaceCounts(graphId) {
   )
 }
 
+async function repairWorkspaceKnowledgeState(graphId) {
+  const snapshot = getRow(
+    `
+    SELECT
+      (SELECT COUNT(*) FROM files WHERE graphId = ?) AS fileCount,
+      (SELECT COUNT(*) FROM entity_mentions WHERE graphId = ?) AS entityMentionCount,
+      (SELECT COUNT(*) FROM event_mentions WHERE graphId = ?) AS eventMentionCount,
+      (SELECT COUNT(*) FROM relation_mentions WHERE graphId = ?) AS relationMentionCount,
+      (SELECT COUNT(*) FROM canonical_entities WHERE graphId = ?) AS canonicalEntityCount,
+      (SELECT COUNT(*) FROM canonical_events WHERE graphId = ?) AS canonicalEventCount,
+      (SELECT COUNT(*) FROM nodes WHERE graphId = ?) AS nodeCount,
+      (SELECT COUNT(*) FROM edges WHERE graphId = ?) AS edgeCount
+    `,
+    [graphId, graphId, graphId, graphId, graphId, graphId, graphId, graphId]
+  ) || {}
+
+  const fileCount = Number(snapshot.fileCount || 0)
+  if (fileCount === 0) return false
+
+  const mentionCount =
+    Number(snapshot.entityMentionCount || 0) +
+    Number(snapshot.eventMentionCount || 0) +
+    Number(snapshot.relationMentionCount || 0)
+  if (mentionCount === 0) return false
+
+  const canonicalCount =
+    Number(snapshot.canonicalEntityCount || 0) +
+    Number(snapshot.canonicalEventCount || 0)
+  const nodeCount = Number(snapshot.nodeCount || 0)
+  const edgeCount = Number(snapshot.edgeCount || 0)
+
+  const needsRepair =
+    canonicalCount === 0 ||
+    (nodeCount === 0 && edgeCount === 0) ||
+    (canonicalCount > 0 && nodeCount === 0)
+
+  if (!needsRepair) return false
+
+  rebuildCanonicalGraph(graphId, allRows, run)
+  syncWorkspaceCounts(graphId)
+  saveToDiskSync()
+  await rebuildGraphDb(graphId)
+  return true
+}
+
 function deleteWorkspaceFileArtifacts(graphId) {
   run('DELETE FROM file_chunks WHERE graphId = ?', [graphId])
   run('DELETE FROM files WHERE graphId = ?', [graphId])
@@ -181,10 +226,10 @@ function getCanonicalNodeExplain(graphId, nodeId) {
     objectKeys: parseJson(row.objectKeys, [])
   }))
 
-  const entity = entityRows.find(row => makeStableId('n', row.canonicalKey) === nodeId)
+  const entity = entityRows.find(row => makeStableId('n', `${graphId}|${row.canonicalKey}`) === nodeId)
   if (entity) return { kind: 'entity', canonical: entity }
 
-  const event = eventRows.find(row => makeStableId('n', row.canonicalKey) === nodeId)
+  const event = eventRows.find(row => makeStableId('n', `${graphId}|${row.canonicalKey}`) === nodeId)
   if (event) return { kind: 'event', canonical: event }
 
   return null
@@ -411,12 +456,13 @@ function buildRelatedEdgeSummary(graphId, nodeId) {
   })
 }
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const graphIds = allRows('SELECT id FROM graphs').map(row => row.id)
     let reconciled = false
     for (const graphId of graphIds) {
       reconciled = reconcileWorkspaceSourceState(graphId) || reconciled
+      reconciled = (await repairWorkspaceKnowledgeState(graphId)) || reconciled
       reconcileWorkspaceCounts(graphId)
     }
     if (reconciled) saveToDisk()
@@ -506,7 +552,7 @@ router.post('/prompt-preview', (req, res) => {
   }
 })
 
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
     let graph = getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id])
     if (!graph) return res.status(404).json({ error: 'Workspace not found' })
@@ -514,6 +560,9 @@ router.get('/:id', (req, res) => {
 
     if (reconcileWorkspaceSourceState(req.params.id)) {
       saveToDisk()
+      graph = ensureWorkspaceExtractionPrompt(getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id]))
+    }
+    if (await repairWorkspaceKnowledgeState(req.params.id)) {
       graph = ensureWorkspaceExtractionPrompt(getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id]))
     }
     reconcileWorkspaceCounts(req.params.id)

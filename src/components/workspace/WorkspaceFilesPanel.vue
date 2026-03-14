@@ -206,9 +206,10 @@ const unifiedFiles = computed(() => {
   const rows = workspaceFiles.value.map(buildCompletedRow)
   const persistedFileIds = new Set(workspaceFiles.value.map(file => String(file.id || '')).filter(Boolean))
   for (const task of importStore.jobItems || []) {
-    if (task.status === 'done') continue
+    const hasPersistedFile = persistedFileIds.has(String(task.id || ''))
+    if (task.status === 'done' && hasPersistedFile) continue
     if (task.status === 'skipped' && task?.summary?.method === 'duplicate-skip') continue
-    if (task.status === 'skipped' && persistedFileIds.has(String(task.id || ''))) continue
+    if (task.status === 'skipped' && hasPersistedFile) continue
     rows.push(buildTaskRow(task))
   }
   rows.sort((left, right) => (right.timestamp || 0) - (left.timestamp || 0))
