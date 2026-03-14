@@ -420,10 +420,27 @@ export const useGraphStore = defineStore('graph', () => {
     }
   }
 
+  async function ensureCurrentGraphLoaded() {
+    const graphId = currentGraphId.value
+    if (!graphId) return false
+
+    const meta = savedGraphs.value.find(item => item.id === graphId)
+    if (!meta) return false
+
+    const expectedNodes = Number(meta.nodeCount || 0)
+    const expectedEdges = Number(meta.edgeCount || 0)
+    const hasGraphData = nodes.value.size > 0 || edges.value.size > 0
+    const shouldReload = !hasGraphData && (expectedNodes > 0 || expectedEdges > 0)
+    if (!shouldReload) return false
+
+    return loadGraph(graphId)
+  }
+
   async function refreshGraphList() {
     try {
       const latest = await fetchGraphList()
       savedGraphs.value = latest
+      await ensureCurrentGraphLoaded()
       return latest
     } catch (error) {
       console.warn('[graphStore] refresh list failed:', error.message)
@@ -513,6 +530,7 @@ export const useGraphStore = defineStore('graph', () => {
         persistCurrentGraphId()
         await loadGraph(currentGraphId.value)
       }
+      await ensureCurrentGraphLoaded()
     } catch (error) {
       console.warn('[graphStore] backend unavailable:', error.message)
       backendReady.value = false
