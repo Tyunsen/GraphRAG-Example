@@ -3,7 +3,7 @@
     <div class="chat-thread-header">
       <div>
         <div class="chat-thread-title">{{ ragStore.currentSession?.title || '当前会话' }}</div>
-        <div class="chat-thread-subtitle">围绕当前工作区继续提问。</div>
+        <div class="chat-thread-subtitle">在这里继续和当前工作区对话。</div>
       </div>
       <button
         v-if="ragStore.messages.length > 0"
@@ -16,7 +16,7 @@
       <div class="chat-messages" ref="messagesRef">
         <div v-if="ragStore.messages.length === 0" class="chat-empty">
           <p>这个会话还没有内容</p>
-          <p class="text-muted">输入问题后，系统会基于当前工作区的文件和图谱来回答。</p>
+          <p class="text-muted">提问后，右侧图谱会保持显示；点选某条消息时，会聚焦到该消息使用的子图。</p>
         </div>
         <ChatMessage
           v-for="msg in ragStore.messages"
@@ -34,7 +34,7 @@
         <textarea
           class="input chat-input"
           v-model="inputText"
-          rows="3"
+          rows="4"
           placeholder="输入问题，例如：油价为什么上升了？"
           @keydown.enter.exact.prevent="sendMessage"
           :disabled="ragStore.isLoading || !graphStore.currentGraphId"
@@ -88,7 +88,7 @@ watch(() => ragStore.messages.length, () => {
   gap: 10px;
 }
 .chat-thread-title {
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 700;
 }
 .chat-thread-subtitle {
@@ -109,25 +109,25 @@ watch(() => ragStore.messages.length, () => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.76);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(148, 163, 184, 0.18);
 }
 .chat-messages {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px;
+  padding: 18px;
 }
 .chat-empty {
   text-align: center;
-  padding: 48px 12px;
+  padding: 56px 12px;
   color: var(--color-text-muted);
   font-size: 14px;
 }
 .text-muted {
   font-size: 12px;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 .chat-loading {
   padding: 8px 0;
@@ -145,12 +145,12 @@ watch(() => ragStore.messages.length, () => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 14px 16px 16px;
+  padding: 16px 18px 18px;
   border-top: 1px solid var(--color-border-light);
 }
 .chat-input {
   resize: vertical;
-  min-height: 92px;
+  min-height: 104px;
 }
 .send-btn {
   align-self: flex-end;
