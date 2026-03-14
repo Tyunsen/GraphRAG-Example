@@ -317,57 +317,68 @@ export async function persistImportedFile({
     }
   }
 
-  run(
-    `
-    INSERT INTO files (id, graphId, fileName, content, fileType, fileSize, importedAt, contentHash, importStatus, importMessage)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    [
+  let records = null
+  try {
+    run(
+      `
+      INSERT INTO files (id, graphId, fileName, content, fileType, fileSize, importedAt, contentHash, importStatus, importMessage)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        id,
+        graphId,
+        fileName,
+        content,
+        fileType || 'txt',
+        Number(fileSize || content.length),
+        now,
+        contentHash,
+        String(importStatus || 'completed'),
+        String(importMessage || '')
+      ]
+    )
+
+    records = buildKnowledgeRecords(graphId, id, fileName, content, nodes, edges, now)
+    insertChunkRows([...records.paragraphRows, ...records.segmentRows])
+    insertFileNodes(records.fileNodes)
+    insertFileEdges(records.fileEdges)
+    insertEntityMentions(records.entityMentions)
+    insertEventMentions(records.eventMentions)
+    insertRelationMentions(records.relationMentions)
+
+    rebuildCanonicalGraph(graphId, allRows, run)
+    const graph = syncWorkspaceCounts(graphId)
+    run(
+      `
+      INSERT OR REPLACE INTO import_history (id, graphId, fileName, timestamp, nodesAdded, edgesAdded)
+      VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      [
+        id,
+        graphId,
+        fileName,
+        now,
+        records.counts.entityMentionCount + records.counts.eventMentionCount,
+        records.counts.relationMentionCount
+      ]
+    )
+
+    saveToDiskSync()
+    await rebuildGraphDb(graphId)
+
+    return {
       id,
-      graphId,
-      fileName,
-      content,
-      fileType || 'txt',
-      Number(fileSize || content.length),
-      now,
-      contentHash,
-      String(importStatus || 'completed'),
-      String(importMessage || '')
-    ]
-  )
-
-  const records = buildKnowledgeRecords(graphId, id, fileName, content, nodes, edges, now)
-  insertChunkRows([...records.paragraphRows, ...records.segmentRows])
-  insertFileNodes(records.fileNodes)
-  insertFileEdges(records.fileEdges)
-  insertEntityMentions(records.entityMentions)
-  insertEventMentions(records.eventMentions)
-  insertRelationMentions(records.relationMentions)
-
-  rebuildCanonicalGraph(graphId, allRows, run)
-  const graph = syncWorkspaceCounts(graphId)
-  run(
-    `
-    INSERT OR REPLACE INTO import_history (id, graphId, fileName, timestamp, nodesAdded, edgesAdded)
-    VALUES (?, ?, ?, ?, ?, ?)
-    `,
-    [
-      id,
-      graphId,
-      fileName,
-      now,
-      records.counts.entityMentionCount + records.counts.eventMentionCount,
-      records.counts.relationMentionCount
-    ]
-  )
-
-  saveToDiskSync()
-  await rebuildGraphDb(graphId)
-
-  return {
-    id,
-    graph,
-    counts: records.counts
+      graph,
+      counts: records.counts
+    }
+  } catch (error) {
+    clearFileArtifacts(graphId, id, fileName)
+    run('DELETE FROM files WHERE id = ? AND graphId = ?', [id, graphId])
+    run('DELETE FROM import_history WHERE id = ? AND graphId = ?', [id, graphId])
+    rebuildCanonicalGraph(graphId, allRows, run)
+    syncWorkspaceCounts(graphId)
+    saveToDiskSync()
+    throw error
   }
 }
 

@@ -1011,8 +1011,9 @@ export function buildKnowledgeRecords(
 
 function aggregateEntityCanonicalRows(graphId, entityRows = [], now = Date.now()) {
   const { clusters, keyAliasMap } = clusterEntityRows(entityRows)
+  const mergedEntries = new Map()
 
-  const canonicalEntities = clusters.map(cluster => {
+  for (const cluster of clusters) {
     const entry = {
       key: cluster.finalKey,
       labels: cluster.rows.map(row => row.mentionText),
@@ -1035,13 +1036,29 @@ function aggregateEntityCanonicalRows(graphId, entityRows = [], now = Date.now()
       }
     }
 
+    if (!mergedEntries.has(entry.key)) {
+      mergedEntries.set(entry.key, entry)
+      continue
+    }
+
+    const existing = mergedEntries.get(entry.key)
+    existing.labels.push(...entry.labels)
+    existing.entityTypes.push(...entry.entityTypes)
+    entry.aliases.forEach(alias => existing.aliases.add(alias))
+    existing.properties = mergeProperties(existing.properties, entry.properties)
+    entry.fileIds.forEach(fileId => existing.fileIds.add(fileId))
+    entry.fileNames.forEach(fileName => existing.fileNames.add(fileName))
+    entry.paragraphRefs.forEach(paragraphIndex => existing.paragraphRefs.add(paragraphIndex))
+    existing.createdAt = Math.min(existing.createdAt, entry.createdAt)
+  }
+
+  const canonicalEntities = [...mergedEntries.values()].map(entry => {
     const label = pickMostFrequent(entry.labels)
     const entityType = pickMostFrequent(entry.entityTypes) || 'default'
     const supportCount = entry.fileIds.size
     const properties = {
       ...entry.properties,
       aliases: [...entry.aliases],
-      mergedCanonicalKeys: [...cluster.sourceKeys],
       supportCount,
       paragraphRefs: [...entry.paragraphRefs].sort((a, b) => a - b)
     }
@@ -1116,6 +1133,119 @@ function aggregateEventCanonicalRows(graphId, eventRows = [], entityKeyAliasMap 
       ...entry.properties,
       aliases: [...entry.aliases],
       mergedCanonicalKeys: [...cluster.sourceKeys],
+      supportCount,
+      eventType,
+      trigger,
+      predicateText,
+      summary,
+      timeText,
+      locationText,
+      subjectKeys,
+      objectKeys,
+      paragraphRefs: [...entry.paragraphRefs].sort((a, b) => a - b)
+    }
+
+    return {
+      id: makeStableId('cv', entry.key),
+      graphId,
+      canonicalKey: entry.key,
+      label,
+      eventType,
+      trigger,
+      summary,
+      subjectKeys: JSON.stringify(subjectKeys),
+      predicateText,
+      objectKeys: JSON.stringify(objectKeys),
+      timeText,
+      locationText,
+      aliases: JSON.stringify([...entry.aliases]),
+      properties: JSON.stringify(properties),
+      supportCount,
+      createdAt: entry.createdAt,
+      updatedAt: now,
+      nodeId: makeStableId('n', entry.key),
+      sourceFile: [...entry.fileNames][0] || ''
+    }
+  })
+
+  return { canonicalEvents, keyAliasMap }
+}
+
+function aggregateEventCanonicalRowsSafe(graphId, eventRows = [], entityKeyAliasMap = new Map(), now = Date.now()) {
+  const { clusters, keyAliasMap } = clusterEventRows(eventRows, entityKeyAliasMap)
+  const mergedEntries = new Map()
+
+  for (const cluster of clusters) {
+    const entry = {
+      key: cluster.finalKey,
+      labels: cluster.rows.map(row => row.label),
+      eventTypes: cluster.rows.map(row => row.eventType),
+      triggers: cluster.rows.map(row => row.trigger),
+      predicateTexts: cluster.rows.map(row => row.predicateText),
+      summaries: cluster.rows.map(row => row.summary),
+      subjectKeys: new Set(),
+      objectKeys: new Set(),
+      timeTexts: [],
+      locationTexts: [],
+      aliases: new Set(cluster.rows.map(row => row.label)),
+      properties: {},
+      fileIds: new Set(),
+      fileNames: new Set(),
+      paragraphRefs: new Set(),
+      createdAt: Math.min(...cluster.rows.map(row => Number(row.createdAt || now)))
+    }
+
+    for (const row of cluster.rows) {
+      entry.properties = mergeProperties(entry.properties, parseJson(row.properties, {}))
+      entry.fileIds.add(row.fileId)
+      if (row.fileName) entry.fileNames.add(row.fileName)
+      entry.aliases.add(row.label)
+      for (const subjectKey of parseJson(row.subjectKeys, [])) entry.subjectKeys.add(entityKeyAliasMap.get(subjectKey) || subjectKey)
+      for (const objectKey of parseJson(row.objectKeys, [])) entry.objectKeys.add(entityKeyAliasMap.get(objectKey) || objectKey)
+      for (const paragraphIndex of parseJson(row.paragraphRefs, [])) {
+        entry.paragraphRefs.add(Number(paragraphIndex))
+      }
+      if (row.timeText) entry.timeTexts.push(row.timeText)
+      if (row.locationText) entry.locationTexts.push(row.locationText)
+    }
+
+    if (!mergedEntries.has(entry.key)) {
+      mergedEntries.set(entry.key, entry)
+      continue
+    }
+
+    const existing = mergedEntries.get(entry.key)
+    existing.labels.push(...entry.labels)
+    existing.eventTypes.push(...entry.eventTypes)
+    existing.triggers.push(...entry.triggers)
+    existing.predicateTexts.push(...entry.predicateTexts)
+    existing.summaries.push(...entry.summaries)
+    entry.subjectKeys.forEach(subjectKey => existing.subjectKeys.add(subjectKey))
+    entry.objectKeys.forEach(objectKey => existing.objectKeys.add(objectKey))
+    existing.timeTexts.push(...entry.timeTexts)
+    existing.locationTexts.push(...entry.locationTexts)
+    entry.aliases.forEach(alias => existing.aliases.add(alias))
+    existing.properties = mergeProperties(existing.properties, entry.properties)
+    entry.fileIds.forEach(fileId => existing.fileIds.add(fileId))
+    entry.fileNames.forEach(fileName => existing.fileNames.add(fileName))
+    entry.paragraphRefs.forEach(paragraphIndex => existing.paragraphRefs.add(paragraphIndex))
+    existing.createdAt = Math.min(existing.createdAt, entry.createdAt)
+  }
+
+  const canonicalEvents = [...mergedEntries.values()].map(entry => {
+    const label = pickMostFrequent(entry.labels)
+    const eventType = pickMostFrequent(entry.eventTypes) || '一般事件'
+    const trigger = pickMostFrequent(entry.triggers) || label
+    const predicateText = pickMostFrequent(entry.predicateTexts) || trigger
+    const summary = pickLongestText(entry.summaries) || label
+    const timeText = pickMostFrequent(entry.timeTexts)
+    const locationText = pickMostFrequent(entry.locationTexts)
+    const supportCount = entry.fileIds.size
+    const subjectKeys = [...entry.subjectKeys]
+    const objectKeys = [...entry.objectKeys]
+    const properties = {
+      ...entry.properties,
+      aliases: [...entry.aliases],
       supportCount,
       eventType,
       trigger,
@@ -1245,7 +1375,7 @@ export function rebuildCanonicalGraph(graphId, allRows, run) {
   )
 
   const { canonicalEntities, keyAliasMap: entityKeyAliasMap } = aggregateEntityCanonicalRows(graphId, entityRows, now)
-  const { canonicalEvents, keyAliasMap: eventKeyAliasMap } = aggregateEventCanonicalRows(graphId, eventRows, entityKeyAliasMap, now)
+  const { canonicalEvents, keyAliasMap: eventKeyAliasMap } = aggregateEventCanonicalRowsSafe(graphId, eventRows, entityKeyAliasMap, now)
   const keyAliasMap = new Map([...entityKeyAliasMap.entries(), ...eventKeyAliasMap.entries()])
   const nodeIdByKey = new Map()
 
