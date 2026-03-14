@@ -1,11 +1,9 @@
 const CN_STOP_WORDS = new Set([
-  '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个',
-  '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好',
-  '自己', '这', '他', '她', '它', '们', '那', '些', '什么', '怎么', '如何', '为什么',
-  '哪', '谁', '多少', '这个', '那个', '这些', '那些', '可以', '能', '会', '应该',
-  '可能', '需要', '想', '知道', '觉得', '认为', '但是', '然而', '因为', '所以',
-  '如果', '虽然', '而且', '或者', '以及', '还是', '不是', '从', '对', '与', '被',
-  '把', '让', '给', '向', '用', '通过', '关于', '之', '其', '此', '该'
+  '的', '了', '在', '是', '我', '有', '和', '就', '不', '也', '一个', '一个人',
+  '这', '那', '这些', '那些', '什么', '怎么', '如何', '为什么', '哪里', '谁',
+  '多少', '可以', '应该', '可能', '需要', '觉得', '认为', '但是', '然而', '因为',
+  '所以', '如果', '而且', '或者', '以及', '关于', '通过', '相关', '信息', '内容',
+  '情况', '哪些', '一下', '一下子', '请问', '里面', '有关', '有没有'
 ])
 
 const EN_STOP_WORDS = new Set([
@@ -23,25 +21,29 @@ const EN_STOP_WORDS = new Set([
   'his', 'she', 'her', 'it', 'its', 'they', 'them', 'their', 'about'
 ])
 
+function unique(values = []) {
+  return [...new Set(values.filter(Boolean))]
+}
+
 export function tokenize(text) {
   if (!text) return []
-  const tokens = []
 
-  // Extract Chinese character sequences
-  const cnMatches = text.match(/[\u4e00-\u9fff]{2,}/g) || []
-  for (const seg of cnMatches) {
-    // Simple bigram segmentation for Chinese
-    if (seg.length <= 4) {
-      tokens.push(seg)
-    } else {
-      for (let i = 0; i < seg.length - 1; i++) {
-        tokens.push(seg.substring(i, i + 2))
-      }
+  const tokens = []
+  const cnMatches = String(text).match(/[\u4e00-\u9fff]{2,}/g) || []
+  for (const segment of cnMatches) {
+    const trimmed = segment.trim()
+    if (!trimmed) continue
+    if (trimmed.length <= 6) {
+      tokens.push(trimmed)
+      continue
+    }
+
+    for (let index = 0; index < trimmed.length - 1; index++) {
+      tokens.push(trimmed.slice(index, index + 2))
     }
   }
 
-  // Extract English word sequences
-  const enMatches = text.match(/[a-zA-Z]+/g) || []
+  const enMatches = String(text).match(/[a-zA-Z]+/g) || []
   for (const word of enMatches) {
     const lower = word.toLowerCase()
     if (lower.length > 1 && !EN_STOP_WORDS.has(lower)) {
@@ -54,13 +56,16 @@ export function tokenize(text) {
 
 export function extractKeywords(text) {
   if (!text) return []
-  const tokens = tokenize(text)
-  // Remove Chinese stop words
-  const filtered = tokens.filter(t => !CN_STOP_WORDS.has(t))
-  // Deduplicate while preserving order
-  return [...new Set(filtered)]
+  return unique(
+    tokenize(text).filter(token => {
+      const normalized = String(token || '').trim().toLowerCase()
+      if (!normalized) return false
+      if (EN_STOP_WORDS.has(normalized)) return false
+      return !CN_STOP_WORDS.has(normalized)
+    })
+  )
 }
 
 export function normalizeLabel(label) {
-  return (label || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  return String(label || '').trim().toLowerCase().replace(/\s+/g, ' ')
 }

@@ -788,6 +788,7 @@ export function buildKnowledgeRecords(
   const nodeKeyByLabel = new Map()
   const fileNodes = []
   const fileEdges = []
+  const fileEdgeIds = new Set()
 
   for (const node of preparedNodes) {
     const label = String(node.label || '').trim()
@@ -955,17 +956,21 @@ export function buildKnowledgeRecords(
       createdAt: now
     })
 
-    fileEdges.push({
-      id: makeStableId('fe', `${fileId}|${sourceLabel}|${targetLabel}|${label}`),
-      graphId,
-      fileId,
-      fileName,
-      sourceLabel,
-      targetLabel,
-      label,
-      edgeProperties: JSON.stringify(properties),
-      createdAt: now
-    })
+    const fileEdgeId = makeStableId('fe', `${fileId}|${sourceLabel}|${targetLabel}|${label}`)
+    if (!fileEdgeIds.has(fileEdgeId)) {
+      fileEdges.push({
+        id: fileEdgeId,
+        graphId,
+        fileId,
+        fileName,
+        sourceLabel,
+        targetLabel,
+        label,
+        edgeProperties: JSON.stringify(properties),
+        createdAt: now
+      })
+      fileEdgeIds.add(fileEdgeId)
+    }
   }
 
   const paragraphRows = buildParagraphRows(

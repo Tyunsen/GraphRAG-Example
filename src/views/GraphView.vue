@@ -12,27 +12,9 @@
       <div v-if="!graphStore.currentGraphMeta" class="workspace-intro">
         <div class="intro-panel">
           <div class="intro-kicker">图谱问答系统</div>
-          <div class="intro-title">把一个工作区当成一个持续生长的研究项目</div>
+          <div class="intro-title">先创建工作区，再围绕这个意图持续导入资料和对话</div>
           <div class="intro-copy">
-            从左侧选择或创建工作区。每个工作区都拥有自己的文件、会话与图谱。
-          </div>
-          <div class="intro-steps">
-            <div class="intro-step">
-              <strong>创建工作区</strong>
-              <span>先定义总意图，再围绕这个意图导入资料。</span>
-            </div>
-            <div class="intro-step">
-              <strong>管理会话</strong>
-              <span>同一工作区下可以展开多条独立对话链路。</span>
-            </div>
-            <div class="intro-step">
-              <strong>导入文件</strong>
-              <span>系统会按工作区意图抽取实体、事件和证据段落。</span>
-            </div>
-            <div class="intro-step">
-              <strong>追踪证据</strong>
-              <span>右侧默认显示工作区全图，点击消息后切换到该消息子图。</span>
-            </div>
+            工作区负责定义抽取范围，会话负责提问和证据追踪，右侧图谱负责展示当前工作区或当前消息的子图。
           </div>
         </div>
       </div>
@@ -51,9 +33,9 @@
 
     <aside class="graph-stage-shell">
       <div v-if="!graphStore.currentGraphMeta" class="graph-intro">
-        <div class="graph-intro-kicker">图谱视图</div>
-        <div class="graph-intro-copy">
-          工作区默认显示全图，选中消息后自动聚焦到该消息对应的证据子图。
+        <div class="graph-intro-card">
+          <div class="graph-intro-kicker">图谱视图</div>
+          <div class="graph-intro-copy">选中工作区后默认显示全图，点消息或证据后切到对应子图。</div>
         </div>
       </div>
 
@@ -62,7 +44,7 @@
           <div class="graph-stage-header-copy">
             <div class="graph-stage-title">{{ graphPanelTitle }}</div>
             <div class="graph-stage-subtitle">
-              {{ graphStore.isFocusedView ? '该消息对应的证据子图' : '当前工作区全图' }}
+              {{ graphStore.isFocusedView ? '当前消息对应的证据子图' : '当前工作区全图' }}
             </div>
           </div>
           <button v-if="graphStore.isFocusedView" class="graph-stage-action" @click="graphStore.showFullGraph()">
@@ -76,7 +58,10 @@
               <div class="graph-node-card-kicker">当前节点</div>
               <div class="graph-node-card-title">{{ graphStore.selectedNode.label }}</div>
             </div>
-            <div class="graph-node-card-type">{{ formatNodeTypeLabel(graphStore.selectedNode.type) }}</div>
+            <div class="graph-node-card-actions">
+              <div class="graph-node-card-type">{{ formatNodeTypeLabel(graphStore.selectedNode.type) }}</div>
+              <button class="graph-node-card-close" type="button" @click="closeNodeExplain">关闭</button>
+            </div>
           </div>
 
           <div v-if="nodeExplainLoading" class="graph-node-card-loading">正在加载节点来源...</div>
@@ -87,54 +72,21 @@
               <span>{{ nodeExplain.evidence?.length || 0 }} 条来源</span>
             </div>
 
-            <div v-if="nodeExplain.canonical?.aliases?.length" class="graph-node-card-group">
-              <div class="graph-node-card-label">别名</div>
-              <div class="graph-node-tags">
-                <span v-for="alias in nodeExplain.canonical.aliases" :key="alias" class="graph-node-tag">{{ alias }}</span>
-              </div>
-            </div>
-
-            <div v-if="nodeExplain.mergeSummary?.length" class="graph-node-card-group">
-              <div class="graph-node-card-label">合并说明</div>
-              <div class="graph-node-merge-list">
-                <div
-                  v-for="item in nodeExplain.mergeSummary.slice(0, 4)"
-                  :key="item.sourceCanonicalKey"
-                  class="graph-node-merge-item"
-                >
-                  <div class="graph-node-merge-tags">
-                    <span v-for="mention in item.mentions" :key="`${item.sourceCanonicalKey}-${mention}`" class="graph-node-tag graph-node-tag-muted">
-                      {{ mention }}
-                    </span>
-                  </div>
-                  <div class="graph-node-merge-copy">{{ item.reason }}</div>
-                </div>
-              </div>
-            </div>
-
-            <div
-              v-if="nodeExplain.canonical?.kind === 'event' && (nodeExplain.canonical.subjectKeys?.length || nodeExplain.canonical.objectKeys?.length)"
-              class="graph-node-card-group"
-            >
-              <div class="graph-node-card-label">事件角色</div>
-              <div class="graph-node-role-line">
-                <span v-if="nodeExplain.canonical.subjectKeys?.length">主体 {{ formatRoleKeys(nodeExplain.canonical.subjectKeys) }}</span>
-                <span v-if="nodeExplain.canonical.objectKeys?.length">客体 {{ formatRoleKeys(nodeExplain.canonical.objectKeys) }}</span>
-              </div>
-            </div>
-
             <div v-if="nodeExplain.evidence?.length" class="graph-node-card-group">
               <div class="graph-node-card-label">来源</div>
               <div class="graph-node-evidence-list">
-                <div v-for="item in nodeExplain.evidence.slice(0, 4)" :key="`${item.fileId}-${item.mentionText}-${item.createdAt}`" class="graph-node-evidence-item">
-                  <div class="graph-node-evidence-file">{{ item.fileName }}</div>
+                <div
+                  v-for="(item, index) in nodeExplain.evidence.slice(0, 4)"
+                  :key="`${item.fileId}-${item.mentionText}-${item.createdAt}`"
+                  class="graph-node-evidence-item"
+                >
+                  <div class="graph-node-evidence-file">来源 {{ index + 1 }}</div>
                   <div class="graph-node-evidence-copy graph-node-evidence-copy-primary">
-                    <span>{{ item.mentionText }}</span>
+                    <span>{{ item.fileName }}</span>
                     <span v-if="item.paragraphRefs?.length">第 {{ item.paragraphRefs.join('、') }} 段</span>
                   </div>
-                  <div class="graph-node-evidence-reason">{{ item.mergeReason }}</div>
-                  <div class="graph-node-evidence-copy">
-                    <span v-if="item.summary">{{ item.summary }}</span>
+                  <div v-if="nodeExplain.canonical?.kind === 'event'" class="graph-node-svo">
+                    {{ formatEventSvo(nodeExplain.canonical) }}
                   </div>
                   <div v-if="item.paragraphs?.length" class="graph-node-paragraph-list">
                     <div
@@ -146,17 +98,6 @@
                       <div class="graph-node-paragraph-content">{{ paragraph.content }}</div>
                     </div>
                   </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="nodeExplain.relatedEdges?.length" class="graph-node-card-group">
-              <div class="graph-node-card-label">关联边</div>
-              <div class="graph-node-edge-list">
-                <div v-for="edge in nodeExplain.relatedEdges.slice(0, 5)" :key="edge.id" class="graph-node-edge-item">
-                  <span class="graph-node-edge-direction">{{ edge.direction === 'out' ? '→' : '←' }}</span>
-                  <span class="graph-node-edge-label">{{ edge.label }}</span>
-                  <span class="graph-node-edge-target">{{ edge.otherLabel }}</span>
                 </div>
               </div>
             </div>
@@ -195,7 +136,6 @@ const activeMessage = computed(() =>
 
 const graphPanelTitle = computed(() => {
   if (!graphStore.isFocusedView) return graphStore.currentGraphMeta?.name || '工作区图谱'
-
   const text = activeMessage.value?.content?.trim()
   if (!text) return '当前消息'
   return text.length > 26 ? `${text.slice(0, 26)}...` : text
@@ -235,16 +175,24 @@ function formatRoleKeys(keys = []) {
     .filter(Boolean)
     .join('、')
 }
+
+function formatEventSvo(canonical) {
+  if (!canonical) return ''
+  const subject = formatRoleKeys(canonical.subjectKeys || []) || '未知主体'
+  const predicate = canonical.predicateText || canonical.trigger || canonical.label || '相关'
+  const object = formatRoleKeys(canonical.objectKeys || []) || '未知客体'
+  return `${subject} -> ${predicate} -> ${object}`
+}
+
+function closeNodeExplain() {
+  graphStore.setSelectedNode(null)
+}
 </script>
 
 <style scoped>
 .graph-view {
   display: grid;
-  grid-template-columns:
-    clamp(232px, 18vw, 280px)
-    clamp(220px, 16vw, 260px)
-    minmax(0, 1.18fr)
-    minmax(320px, 0.92fr);
+  grid-template-columns: clamp(232px, 18vw, 280px) clamp(220px, 16vw, 260px) minmax(0, 1.18fr) minmax(320px, 0.92fr);
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -289,9 +237,9 @@ function formatRoleKeys(keys = []) {
 
 .panel-layer {
   flex: 1;
+  display: flex;
   flex-direction: column;
   min-height: 0;
-  display: flex;
   overflow: hidden;
 }
 
@@ -309,7 +257,7 @@ function formatRoleKeys(keys = []) {
 }
 
 .intro-panel,
-.graph-intro {
+.graph-intro-card {
   width: 100%;
   max-width: 760px;
   border-radius: 24px;
@@ -322,15 +270,15 @@ function formatRoleKeys(keys = []) {
 .intro-kicker,
 .graph-intro-kicker {
   font-size: 11px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--color-text-muted);
 }
 
 .intro-title {
-  margin-top: 8px;
+  margin-top: 12px;
   font-size: 30px;
-  line-height: 1.15;
+  line-height: 1.12;
   font-weight: 700;
 }
 
@@ -338,41 +286,16 @@ function formatRoleKeys(keys = []) {
 .graph-intro-copy {
   margin-top: 12px;
   font-size: 14px;
-  line-height: 1.75;
-  color: var(--color-text-secondary);
-}
-
-.intro-steps {
-  display: grid;
-  gap: 12px;
-  margin-top: 22px;
-}
-
-.intro-step {
-  display: grid;
-  gap: 4px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid rgba(148, 163, 184, 0.14);
-}
-
-.intro-step strong {
-  font-size: 13px;
-}
-
-.intro-step span {
-  font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.8;
   color: var(--color-text-secondary);
 }
 
 .graph-stage-shell {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   border-left: 1px solid var(--color-border);
-  background: linear-gradient(180deg, #f9fafb 0%, #f3f5f8 100%);
-  min-width: 0;
+  background: linear-gradient(180deg, #fafaf9 0%, #f3f4f6 100%);
 }
 
 .graph-stage-header {
@@ -380,28 +303,19 @@ function formatRoleKeys(keys = []) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  padding: 18px 18px 14px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.graph-stage-header-copy {
-  min-width: 0;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.76);
 }
 
 .graph-stage-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .graph-stage-subtitle {
   margin-top: 4px;
   font-size: 12px;
-  line-height: 1.6;
   color: var(--color-text-secondary);
 }
 
@@ -414,19 +328,13 @@ function formatRoleKeys(keys = []) {
   font-weight: 600;
 }
 
-.graph-stage {
-  flex: 1;
-  min-height: 0;
-}
-
 .graph-node-card {
-  margin: 0 18px 14px;
-  padding: 14px 16px;
+  margin: 14px 16px 0;
+  padding: 14px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(148, 163, 184, 0.18);
-  display: grid;
-  gap: 10px;
+  overflow: hidden;
 }
 
 .graph-node-card-head {
@@ -436,199 +344,152 @@ function formatRoleKeys(keys = []) {
   gap: 12px;
 }
 
-.graph-node-card-kicker,
-.graph-node-card-label {
+.graph-node-card-kicker {
   font-size: 11px;
   color: var(--color-text-muted);
 }
 
 .graph-node-card-title {
-  margin-top: 2px;
-  font-size: 14px;
+  margin-top: 4px;
+  font-size: 18px;
   font-weight: 700;
+  line-height: 1.25;
+}
+
+.graph-node-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .graph-node-card-type {
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.06);
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-.graph-node-card-loading,
-.graph-node-card-meta,
-.graph-node-role-line,
-.graph-node-evidence-copy {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.graph-node-card-meta,
-.graph-node-role-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.graph-node-card-group {
-  display: grid;
-  gap: 6px;
-}
-
-.graph-node-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.graph-node-tag {
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(79, 109, 245, 0.08);
+  background: rgba(79, 109, 245, 0.1);
   color: var(--color-primary);
   font-size: 11px;
   font-weight: 600;
 }
 
-.graph-node-tag-muted {
-  background: rgba(15, 23, 42, 0.06);
+.graph-node-card-close {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.96);
   color: var(--color-text-secondary);
-}
-
-.graph-node-merge-list,
-.graph-node-edge-list {
-  display: grid;
-  gap: 8px;
-}
-
-.graph-node-merge-item,
-.graph-node-edge-item {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(248, 250, 252, 0.88);
-  border: 1px solid rgba(148, 163, 184, 0.12);
-}
-
-.graph-node-merge-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.graph-node-merge-copy,
-.graph-node-evidence-reason,
-.graph-node-paragraph-content,
-.graph-node-edge-item {
   font-size: 12px;
-  line-height: 1.65;
+  font-weight: 600;
+}
+
+.graph-node-card-loading,
+.graph-node-card-meta {
+  margin-top: 12px;
+  font-size: 12px;
   color: var(--color-text-secondary);
 }
 
-.graph-node-merge-copy {
-  margin-top: 6px;
+.graph-node-card-meta {
+  display: flex;
+  gap: 12px;
 }
 
-.graph-node-evidence-list {
-  display: grid;
-  gap: 8px;
+.graph-node-card-group {
+  margin-top: 14px;
 }
 
-.graph-node-evidence-item {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(248, 250, 252, 0.88);
-  border: 1px solid rgba(148, 163, 184, 0.12);
-}
-
-.graph-node-evidence-file {
+.graph-node-card-label {
   font-size: 12px;
   font-weight: 700;
 }
 
+.graph-node-evidence-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.graph-node-evidence-item {
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.95);
+  border: 1px solid var(--color-border-light);
+}
+
+.graph-node-evidence-file {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+
 .graph-node-evidence-copy {
-  margin-top: 4px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .graph-node-evidence-copy-primary {
-  margin-top: 6px;
   color: var(--color-text);
+  font-weight: 600;
 }
 
-.graph-node-evidence-reason {
-  margin-top: 4px;
+.graph-node-svo {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(79, 109, 245, 0.08);
+  color: var(--color-primary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .graph-node-paragraph-list {
   display: grid;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .graph-node-paragraph {
-  padding: 10px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid rgba(226, 232, 240, 0.9);
 }
 
 .graph-node-paragraph-index {
   font-size: 11px;
   font-weight: 700;
+  color: var(--color-text-secondary);
 }
 
 .graph-node-paragraph-content {
   margin-top: 4px;
-}
-
-.graph-node-edge-item {
-  display: grid;
-  grid-template-columns: 18px auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-}
-
-.graph-node-edge-direction,
-.graph-node-edge-label {
+  font-size: 12px;
+  line-height: 1.7;
   color: var(--color-text);
-  font-weight: 700;
-}
-
-.graph-node-edge-target {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
 }
 
 .graph-stage {
   flex: 1;
   min-height: 0;
+  padding: 12px 16px 16px;
 }
 
-@media (max-width: 1400px) {
+@media (max-width: 1360px) {
   .graph-view {
-    grid-template-columns:
-      224px
-      212px
-      minmax(0, 1.08fr)
-      minmax(300px, 0.88fr);
-  }
-
-  .workspace-main-body {
-    padding: 20px;
+    grid-template-columns: clamp(216px, 20vw, 260px) 220px minmax(0, 1fr) minmax(300px, 0.9fr);
   }
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1120px) {
   .graph-view {
-    grid-template-columns: 220px minmax(0, 1fr) 320px;
+    grid-template-columns: 260px minmax(0, 1fr);
   }
 
-  .workspace-nav-shell {
+  .workspace-nav-shell,
+  .graph-stage-shell {
     display: none;
   }
 }

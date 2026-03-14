@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { getDB } from '../db.js'
-import { createImportJob, getImportJob } from '../importJobs.js'
+import { createImportJob, getImportJob, retryImportJob } from '../importJobs.js'
 
 const router = Router()
 
@@ -53,6 +53,17 @@ router.post('/:graphId', (req, res) => {
 router.get('/detail/:jobId', (req, res) => {
   try {
     const job = getImportJob(req.params.jobId)
+    if (!job) return res.status(404).json({ error: 'Import job not found' })
+    res.json(job)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+router.post('/detail/:jobId/retry', (req, res) => {
+  try {
+    const { fileIds = [] } = req.body || {}
+    const job = retryImportJob(req.params.jobId, fileIds)
     if (!job) return res.status(404).json({ error: 'Import job not found' })
     res.json(job)
   } catch (error) {

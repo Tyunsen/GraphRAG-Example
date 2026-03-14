@@ -72,7 +72,15 @@
             {{ formatMethod(item.summary.method) }} · {{ item.summary.nodeCount }} 节点 · {{ item.summary.edgeCount }} 关系
           </div>
           <div v-else-if="item.error" class="task-item-error">{{ item.error }}</div>
+
+          <div v-if="item.status === 'error'" class="task-item-actions">
+            <button class="task-retry-btn" type="button" @click="retryItem(item)">重试</button>
+          </div>
         </div>
+      </div>
+
+      <div v-if="hasFailedItems" class="task-actions">
+        <button class="task-retry-all-btn" type="button" @click="retryFailedItems()">重试失败项</button>
       </div>
 
       <div v-if="importStore.extractionSummary" class="summary-card">
@@ -152,6 +160,7 @@ const STAGE_LABELS = {
 }
 
 const taskItems = computed(() => importStore.jobItems || [])
+const hasFailedItems = computed(() => taskItems.value.some(item => item.status === 'error'))
 
 const progressPercent = computed(() => {
   if (importStore.totalCount) return importStore.overallProgress
@@ -243,6 +252,16 @@ async function onFilesSelected(files) {
     updatedAt: Date.now()
   })
   await graphStore.refreshGraphList()
+}
+
+async function retryFailedItems(fileIds = []) {
+  await importStore.retryFailedItems(fileIds)
+  await refreshFiles()
+}
+
+async function retryItem(item) {
+  if (!item?.id) return
+  await retryFailedItems([item.id])
 }
 
 async function refreshFiles() {
@@ -382,6 +401,10 @@ function formatMethod(method) {
   border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
+.process-card {
+  overflow: hidden;
+}
+
 .file-list-card {
   flex: 1;
   min-height: 0;
@@ -464,6 +487,9 @@ function formatMethod(method) {
   display: grid;
   gap: 10px;
   margin-top: 14px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .task-item {
@@ -572,6 +598,30 @@ function formatMethod(method) {
 .task-item-meta,
 .task-item-error {
   margin-top: 8px;
+}
+
+.task-item-actions,
+.task-actions {
+  margin-top: 10px;
+}
+
+.task-item-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.task-retry-btn,
+.task-retry-all-btn {
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: rgba(79, 109, 245, 0.1);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.task-retry-all-btn {
+  width: 100%;
 }
 
 .summary-card {

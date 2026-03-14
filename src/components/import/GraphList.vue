@@ -7,7 +7,7 @@
 
     <div v-else class="graph-list-items">
       <button
-        v-for="workspace in sortedGraphs"
+        v-for="workspace in workspaceList"
         :key="workspace.id"
         class="graph-item"
         :class="{ active: graphStore.currentGraphId === workspace.id }"
@@ -21,49 +21,53 @@
           <div class="graph-item-meta">
             {{ workspace.fileCount || 0 }} 文档 · {{ workspace.sessionCount || 0 }} 会话 · {{ workspace.nodeCount || 0 }} 节点
           </div>
+          <div v-if="workspace.intentQuery" class="graph-item-intent">{{ workspace.intentQuery }}</div>
           <div class="graph-item-time">{{ formatTime(workspace.updatedAt || workspace.createdAt) }}</div>
         </div>
 
         <div class="graph-item-actions" @click.stop>
-          <button class="action-btn" title="编辑工作区" @click="startEdit(workspace)">编辑</button>
+          <button class="action-btn" title="编辑工作区" @click="openEditPanel(workspace)">编辑</button>
           <button class="action-btn action-btn-danger" title="删除工作区" @click="deleteGraph(workspace.id)">删除</button>
         </div>
       </button>
     </div>
 
-    <div v-if="editingId" class="workspace-form workspace-form-edit">
-      <div class="workspace-form-title">编辑工作区</div>
-      <input class="input" v-model="editName" placeholder="工作区名称" />
-      <textarea class="input workspace-intent" v-model="editIntent" placeholder="更新这个工作区的总意图" />
-      <div class="inline-actions">
-        <button class="btn btn-primary" @click="confirmEdit">保存</button>
-        <button class="btn btn-secondary" @click="cancelEdit">取消</button>
-      </div>
-    </div>
+    <transition name="workspace-panel">
+      <div v-if="creating || editingId" class="workspace-overlay" @click="closePanel">
+        <div class="workspace-card" @click.stop>
+          <div class="workspace-kicker">{{ editingId ? '编辑工作区' : '新建工作区' }}</div>
+          <div class="workspace-title">{{ editingId ? '更新工作区意图与抽取范围' : '先定义工作区意图，再持续导入文档' }}</div>
+          <div class="workspace-copy">
+            工作区意图会直接参与抽取提示和筛选逻辑。模型只围绕这里定义的主题、范围和关注对象构图。
+          </div>
 
-    <transition name="create-workspace">
-      <div v-if="creating" class="workspace-create-overlay" @click="closeCreatePanel">
-        <div class="workspace-create-card" @click.stop>
-          <div class="workspace-create-kicker">新建工作区</div>
-          <div class="workspace-create-title">先定义意图，再持续导入文档构图</div>
-          <div class="workspace-create-copy">工作区会作为一个持续更新的图谱容器，后续上传文件和会话都挂在这里。</div>
-
-          <div class="workspace-create-fields">
+          <div class="workspace-fields">
             <input
-              class="input workspace-create-input"
-              v-model="createName"
-              placeholder="工作区名称，例如：伊朗局势追踪"
+              v-model="form.name"
+              class="input workspace-input"
+              placeholder="工作区名称，例如：伊朗局势"
             />
             <textarea
-              class="input workspace-create-intent"
-              v-model="createIntent"
-              placeholder="输入这个工作区的总意图，例如：围绕伊朗战争，提取军事打击、核设施、油价、航运风险与外交信号相关的实体、事件与事件链。"
+              v-model="form.intentQuery"
+              class="input workspace-intent"
+              placeholder="工作区总意图，例如：只看中国相关的表态、行动与影响"
+            />
+            <textarea
+              v-model="form.intentSummary"
+              class="input workspace-summary"
+              placeholder="抽取补充说明，例如：重点关注中国官方表态、外交动作、经济影响，弱相关内容直接忽略"
             />
           </div>
 
-          <div class="workspace-create-actions">
-            <button class="btn btn-secondary" @click="closeCreatePanel">取消</button>
-            <button class="btn btn-primary" :disabled="!createIntent.trim()" @click="submitCreate">创建工作区</button>
+          <div class="workspace-actions">
+            <button class="btn btn-secondary" @click="closePanel">取消</button>
+            <button
+              class="btn btn-primary"
+              :disabled="!form.intentQuery.trim()"
+              @click="submitPanel"
+            >
+              {{ editingId ? '保存修改' : '创建工作区' }}
+            </button>
           </div>
         </div>
       </div>
@@ -72,71 +76,75 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useGraphStore } from '@/stores/graphStore'
 
 const graphStore = useGraphStore()
 
 const creating = ref(false)
-const createName = ref('')
-const createIntent = ref('')
-
 const editingId = ref(null)
-const editName = ref('')
-const editIntent = ref('')
+const form = reactive({
+  name: '',
+  intentQuery: '',
+  intentSummary: ''
+})
 
-const sortedGraphs = computed(() =>
-  [...graphStore.savedGraphs].sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt))
-)
+const workspaceList = computed(() => graphStore.savedGraphs)
+
+function resetForm() {
+  form.name = ''
+  form.intentQuery = ''
+  form.intentSummary = ''
+}
 
 async function loadGraph(graphId) {
-  if (editingId.value || graphStore.currentGraphId === graphId) return
+  if (creating.value || editingId.value || graphStore.currentGraphId === graphId) return
   await graphStore.loadGraph(graphId)
 }
 
 function openCreatePanel() {
   creating.value = true
+  editingId.value = null
+  resetForm()
 }
 
-function closeCreatePanel() {
+function openEditPanel(workspace) {
   creating.value = false
-  createName.value = ''
-  createIntent.value = ''
+  editingId.value = workspace.id
+  form.name = workspace.name || ''
+  form.intentQuery = workspace.intentQuery || ''
+  form.intentSummary = workspace.intentSummary || ''
 }
 
-async function submitCreate() {
-  if (!createIntent.value.trim()) return
-  await graphStore.createWorkspace({
-    name: createName.value.trim() || '未命名工作区',
-    intentQuery: createIntent.value.trim()
-  })
-  closeCreatePanel()
+function closePanel() {
+  creating.value = false
+  editingId.value = null
+  resetForm()
+}
+
+async function submitPanel() {
+  if (!form.intentQuery.trim()) return
+
+  if (editingId.value) {
+    await graphStore.renameGraph(editingId.value, {
+      name: form.name.trim() || '未命名工作区',
+      intentQuery: form.intentQuery.trim(),
+      intentSummary: form.intentSummary.trim()
+    })
+  } else {
+    await graphStore.createWorkspace({
+      name: form.name.trim() || '未命名工作区',
+      intentQuery: form.intentQuery.trim(),
+      intentSummary: form.intentSummary.trim()
+    })
+  }
+
+  closePanel()
 }
 
 async function deleteGraph(graphId) {
   await graphStore.deleteSavedGraph(graphId)
-  if (editingId.value === graphId) cancelEdit()
-}
-
-function startEdit(workspace) {
-  editingId.value = workspace.id
-  editName.value = workspace.name
-  editIntent.value = workspace.intentQuery || ''
-}
-
-async function confirmEdit() {
-  if (!editingId.value || !editIntent.value.trim()) return
-  await graphStore.renameGraph(editingId.value, {
-    name: editName.value.trim() || '未命名工作区',
-    intentQuery: editIntent.value.trim()
-  })
-  cancelEdit()
-}
-
-function cancelEdit() {
-  editingId.value = null
-  editName.value = ''
-  editIntent.value = ''
+  if (editingId.value === graphId) closePanel()
 }
 
 function formatTime(ts) {
@@ -156,34 +164,6 @@ defineExpose({ openCreatePanel })
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.workspace-form {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 16px;
-  background: rgba(248, 250, 252, 0.95);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-}
-
-.workspace-form-title {
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.workspace-form-edit {
-  margin-top: 4px;
-}
-
-.workspace-intent {
-  min-height: 108px;
-  resize: none;
-}
-
-.inline-actions {
-  display: flex;
-  gap: 8px;
 }
 
 .graph-list-empty {
@@ -225,13 +205,12 @@ defineExpose({ openCreatePanel })
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid transparent;
   text-align: left;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .graph-item:hover {
   background: rgba(255, 255, 255, 0.98);
   border-color: rgba(148, 163, 184, 0.24);
-  transform: translateY(-1px);
 }
 
 .graph-item.active {
@@ -267,13 +246,23 @@ defineExpose({ openCreatePanel })
 }
 
 .graph-item-meta,
-.graph-item-time {
+.graph-item-time,
+.graph-item-intent {
   font-size: 11px;
   color: var(--color-text-secondary);
 }
 
 .graph-item-meta {
   margin-top: 4px;
+}
+
+.graph-item-intent {
+  margin-top: 6px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .graph-item-time {
@@ -304,7 +293,7 @@ defineExpose({ openCreatePanel })
   color: var(--color-danger);
 }
 
-.workspace-create-overlay {
+.workspace-overlay {
   position: fixed;
   inset: 0;
   z-index: 80;
@@ -316,8 +305,8 @@ defineExpose({ openCreatePanel })
   padding: 24px;
 }
 
-.workspace-create-card {
-  width: min(640px, calc(100vw - 32px));
+.workspace-card {
+  width: min(680px, calc(100vw - 32px));
   display: grid;
   gap: 14px;
   padding: 28px;
@@ -327,58 +316,50 @@ defineExpose({ openCreatePanel })
   box-shadow: 0 28px 80px rgba(15, 23, 42, 0.22);
 }
 
-.workspace-create-kicker {
+.workspace-kicker {
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--color-text-muted);
 }
 
-.workspace-create-title {
+.workspace-title {
   font-size: 28px;
   line-height: 1.1;
   font-weight: 700;
 }
 
-.workspace-create-copy {
+.workspace-copy {
   font-size: 13px;
   line-height: 1.7;
   color: var(--color-text-secondary);
 }
 
-.workspace-create-fields {
+.workspace-fields {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
-.workspace-create-input,
-.workspace-create-intent {
-  width: 100%;
-}
-
-.workspace-create-intent {
-  min-height: 144px;
+.workspace-intent,
+.workspace-summary {
+  min-height: 112px;
   resize: none;
 }
 
-.workspace-create-actions {
+.workspace-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
 }
 
-.create-workspace-enter-active,
-.create-workspace-leave-active {
-  transition: opacity 0.18s ease;
-}
+@media (max-width: 720px) {
+  .workspace-card {
+    padding: 22px;
+    border-radius: 22px;
+  }
 
-.create-workspace-enter-from,
-.create-workspace-leave-to {
-  opacity: 0;
-}
-
-.create-workspace-enter-from .workspace-create-card,
-.create-workspace-leave-to .workspace-create-card {
-  transform: translateY(10px) scale(0.99);
+  .workspace-title {
+    font-size: 22px;
+  }
 }
 </style>

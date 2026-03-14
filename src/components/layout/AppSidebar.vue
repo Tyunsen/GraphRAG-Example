@@ -23,28 +23,21 @@
             <div>
               <div class="settings-dialog-kicker">系统设置</div>
               <div class="settings-dialog-title">设置</div>
-              <div class="settings-dialog-subtitle">按模块管理模型、提示词和后续扩展配置。</div>
+              <div class="settings-dialog-subtitle">这里只保留模型与检索配置。</div>
             </div>
             <button class="settings-close" @click="settingsOpen = false">关闭</button>
           </div>
 
           <div class="settings-dialog-body">
             <aside class="settings-menu">
-              <button
-                v-for="item in settingTabs"
-                :key="item.key"
-                class="settings-menu-item"
-                :class="{ active: activeSettingsTab === item.key }"
-                @click="activeSettingsTab = item.key"
-              >
-                <span class="settings-menu-title">{{ item.label }}</span>
-                <span class="settings-menu-desc">{{ item.desc }}</span>
+              <button class="settings-menu-item active" type="button">
+                <span class="settings-menu-title">模型</span>
+                <span class="settings-menu-desc">接口、模型参数与检索配置</span>
               </button>
             </aside>
 
             <section class="settings-content">
-              <ModelSettingsPanel v-if="activeSettingsTab === 'model'" />
-              <ExtractionSettingsPanel v-else />
+              <ModelSettingsPanel />
             </section>
           </div>
         </div>
@@ -57,16 +50,9 @@
 import { ref } from 'vue'
 import GraphList from '@/components/import/GraphList.vue'
 import ModelSettingsPanel from '@/components/settings/ModelSettingsPanel.vue'
-import ExtractionSettingsPanel from '@/components/settings/ExtractionSettingsPanel.vue'
 
 const settingsOpen = ref(false)
 const graphListRef = ref(null)
-const activeSettingsTab = ref('model')
-
-const settingTabs = [
-  { key: 'model', label: '模型', desc: '接口、模型参数与检索配置' },
-  { key: 'extraction', label: '抽取提示词', desc: '工作区意图与抽取模板' }
-]
 </script>
 
 <style scoped>
@@ -218,52 +204,52 @@ const settingTabs = [
 
 .settings-menu-item {
   text-align: left;
-  padding: 14px 14px 12px;
+  padding: 14px 14px;
   border-radius: 16px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.72);
   border: 1px solid transparent;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-
-.settings-menu-item:hover {
-  background: rgba(255, 255, 255, 0.82);
 }
 
 .settings-menu-item.active {
+  border-color: rgba(79, 109, 245, 0.2);
   background: rgba(79, 109, 245, 0.08);
-  border-color: rgba(79, 109, 245, 0.24);
 }
 
 .settings-menu-title {
   display: block;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .settings-menu-desc {
   display: block;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--color-text-secondary);
+  line-height: 1.5;
 }
 
 .settings-content {
-  overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
   padding: 24px 28px 28px;
 }
 
-.settings-overlay-enter-active,
-.settings-overlay-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
-}
+@media (max-width: 900px) {
+  .settings-dialog {
+    width: min(100vw - 20px, 1120px);
+    height: min(100vh - 20px, 860px);
+    border-radius: 22px;
+  }
 
-.settings-overlay-enter-from,
-.settings-overlay-leave-to {
-  opacity: 0;
-}
+  .settings-dialog-body {
+    grid-template-columns: 1fr;
+  }
 
-.settings-overlay-enter-from .settings-dialog,
-.settings-overlay-leave-to .settings-dialog {
-  transform: translateY(12px) scale(0.99);
+  .settings-menu {
+    border-right: none;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  }
 }
 </style>

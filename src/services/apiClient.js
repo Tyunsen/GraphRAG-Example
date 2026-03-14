@@ -132,6 +132,13 @@ export async function fetchImportJobApi(jobId) {
   return request(`/import-jobs/detail/${jobId}`)
 }
 
+export async function retryImportJobApi(jobId, payload = {}) {
+  return request(`/import-jobs/detail/${jobId}/retry`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
 export async function deleteFileApi(graphId, fileId) {
   return request(`/files/${graphId}/detail/${fileId}`, {
     method: 'DELETE'

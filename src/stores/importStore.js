@@ -4,7 +4,7 @@ import { useGraphStore } from './graphStore'
 import { useSettingsStore } from './settingsStore'
 import { parseJSON } from '@/services/parsers/jsonParser'
 import { parseCSV } from '@/services/parsers/csvParser'
-import { createImportJobApi, fetchImportJobApi } from '@/services/apiClient'
+import { createImportJobApi, fetchImportJobApi, retryImportJobApi } from '@/services/apiClient'
 import { generateId } from '@/utils/idGenerator'
 
 const IMPORT_JOB_STORAGE_KEY = 'zstp-active-import-jobs'
@@ -301,7 +301,6 @@ export const useImportStore = defineStore('import', () => {
       files: payloadFiles,
       options: {
         useLLMExtraction: settings.useLLMExtraction,
-        extractionPrompt: settings.extractionPrompt,
         modelName: settings.modelName,
         temperature: settings.temperature,
         maxTokens: settings.maxTokens
@@ -338,6 +337,19 @@ export const useImportStore = defineStore('import', () => {
     persistJobForWorkspace(graphStore.currentGraphId, null)
   }
 
+  async function retryFailedItems(fileIds = []) {
+    const jobId = jobSnapshot.value?.id || lastResult.value?.id || activeJobId.value
+    if (!jobId) {
+      throw new Error('当前没有可重试的导入任务')
+    }
+
+    const job = await retryImportJobApi(jobId, { fileIds })
+    activeJobId.value = job.id
+    persistJobForWorkspace(graphStore.currentGraphId, job.id)
+    applyJobSnapshot(job)
+    return waitForJob(job.id)
+  }
+
   watch(
     () => graphStore.currentGraphId,
     graphId => {
@@ -366,6 +378,7 @@ export const useImportStore = defineStore('import', () => {
     activeJobId,
     jobSnapshot,
     importFiles,
+    retryFailedItems,
     cancelImport,
     clearProcess,
     refreshWorkspaceGraph

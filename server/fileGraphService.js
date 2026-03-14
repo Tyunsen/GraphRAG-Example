@@ -111,7 +111,7 @@ function insertFileEdges(rows = []) {
   for (const row of rows) {
     run(
       `
-      INSERT INTO file_edges (id, graphId, fileId, fileName, sourceLabel, targetLabel, label, edgeProperties, createdAt)
+      INSERT OR REPLACE INTO file_edges (id, graphId, fileId, fileName, sourceLabel, targetLabel, label, edgeProperties, createdAt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
