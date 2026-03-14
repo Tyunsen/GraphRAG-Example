@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { getDB, saveToDisk } from '../db.js'
 import { deleteWorkspaceGraph, queryWorkspaceSubgraph, syncWorkspaceGraph } from '../graphdb.js'
-import { rebuildCanonicalGraph } from '../knowledgePipeline.js'
+import { makeStableId, rebuildCanonicalGraph } from '../knowledgePipeline.js'
 import { buildIntentProfile } from '../workspaceIntent.js'
 
 const router = Router()
@@ -31,6 +31,12 @@ function parseJson(value, fallback) {
   } catch {
     return fallback
   }
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value
+  const parsed = parseJson(value, [])
+  return Array.isArray(parsed) ? parsed : []
 }
 
 async function rebuildGraphDb(graphId) {
@@ -78,6 +84,97 @@ function deleteWorkspaceFileArtifacts(graphId) {
   run('DELETE FROM files WHERE graphId = ?', [graphId])
   run('DELETE FROM file_nodes WHERE graphId = ?', [graphId])
   run('DELETE FROM file_edges WHERE graphId = ?', [graphId])
+}
+
+function getCanonicalNodeExplain(graphId, nodeId) {
+  const entityRows = allRows('SELECT * FROM canonical_entities WHERE graphId = ?', [graphId]).map(row => ({
+    ...row,
+    aliases: parseJson(row.aliases, []),
+    properties: parseJson(row.properties, {})
+  }))
+  const eventRows = allRows('SELECT * FROM canonical_events WHERE graphId = ?', [graphId]).map(row => ({
+    ...row,
+    aliases: parseJson(row.aliases, []),
+    properties: parseJson(row.properties, {}),
+    subjectKeys: parseJson(row.subjectKeys, []),
+    objectKeys: parseJson(row.objectKeys, [])
+  }))
+
+  const entity = entityRows.find(row => makeStableId('n', row.canonicalKey) === nodeId)
+  if (entity) return { kind: 'entity', canonical: entity }
+
+  const event = eventRows.find(row => makeStableId('n', row.canonicalKey) === nodeId)
+  if (event) return { kind: 'event', canonical: event }
+
+  return null
+}
+
+function buildEvidenceSummary(kind, graphId, canonical, mergedKeys = []) {
+  if (kind === 'entity') {
+    const rows = allRows(
+      `
+      SELECT fileId, fileName, canonicalKey, mentionText, paragraphRefs, confidence, createdAt
+      FROM entity_mentions
+      WHERE graphId = ?
+      `,
+      [graphId]
+    ).filter(row => mergedKeys.includes(row.canonicalKey))
+
+    return rows.map(row => ({
+      fileId: row.fileId,
+      fileName: row.fileName,
+      mentionText: row.mentionText,
+      paragraphRefs: parseJsonArray(row.paragraphRefs),
+      confidence: Number(row.confidence || 0),
+      createdAt: Number(row.createdAt || 0)
+    }))
+  }
+
+  const rows = allRows(
+    `
+    SELECT fileId, fileName, canonicalKey, label, summary, paragraphRefs, confidence, createdAt
+    FROM event_mentions
+    WHERE graphId = ?
+    `,
+    [graphId]
+  ).filter(row => mergedKeys.includes(row.canonicalKey))
+
+  return rows.map(row => ({
+      fileId: row.fileId,
+      fileName: row.fileName,
+      mentionText: row.label,
+      summary: row.summary,
+      paragraphRefs: parseJsonArray(row.paragraphRefs),
+      confidence: Number(row.confidence || 0),
+      createdAt: Number(row.createdAt || 0)
+    }))
+}
+
+function buildRelatedEdgeSummary(graphId, nodeId) {
+  const nodeMap = new Map(allRows('SELECT id, label, type FROM nodes WHERE graphId = ?', [graphId]).map(row => [row.id, row]))
+  return allRows(
+    `
+    SELECT id, source, target, label, properties
+    FROM edges
+    WHERE graphId = ? AND (source = ? OR target = ?)
+    ORDER BY createdAt ASC
+    `,
+    [graphId, nodeId, nodeId]
+  ).map(edge => {
+    const otherId = edge.source === nodeId ? edge.target : edge.source
+    const otherNode = nodeMap.get(otherId) || null
+    const properties = parseJson(edge.properties, {})
+    return {
+      id: edge.id,
+      label: edge.label,
+      direction: edge.source === nodeId ? 'out' : 'in',
+      otherNodeId: otherId,
+      otherLabel: otherNode?.label || '',
+      otherType: otherNode?.type || '',
+      supportCount: Number(properties.supportCount || 0),
+      paragraphRefs: parseJsonArray(properties.paragraphRefs)
+    }
+  })
 }
 
 router.get('/', (req, res) => {
@@ -169,6 +266,58 @@ router.get('/:id', (req, res) => {
       nodes,
       edges,
       importHistory
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+router.get('/:id/nodes/:nodeId/explain', (req, res) => {
+  try {
+    const workspace = getRow('SELECT id FROM graphs WHERE id = ?', [req.params.id])
+    if (!workspace) return res.status(404).json({ error: 'Workspace not found' })
+
+    const node = getRow('SELECT * FROM nodes WHERE graphId = ? AND id = ?', [req.params.id, req.params.nodeId])
+    if (!node) return res.status(404).json({ error: 'Node not found' })
+
+    const match = getCanonicalNodeExplain(req.params.id, req.params.nodeId)
+    if (!match) {
+      return res.json({
+        node: {
+          ...node,
+          properties: parseJson(node.properties, {})
+        },
+        canonical: null,
+        evidence: [],
+        relatedEdges: buildRelatedEdgeSummary(req.params.id, req.params.nodeId)
+      })
+    }
+
+    const canonical = match.canonical
+    const mergedKeys = canonical.properties?.mergedCanonicalKeys || [canonical.canonicalKey]
+    const evidence = buildEvidenceSummary(match.kind, req.params.id, canonical, mergedKeys)
+
+    res.json({
+      node: {
+        ...node,
+        properties: parseJson(node.properties, {})
+      },
+      canonical: {
+        kind: match.kind,
+        canonicalKey: canonical.canonicalKey,
+        label: canonical.label,
+        aliases: canonical.aliases || [],
+        supportCount: Number(canonical.supportCount || 0),
+        mergedCanonicalKeys: mergedKeys,
+        subjectKeys: canonical.subjectKeys || [],
+        objectKeys: canonical.objectKeys || [],
+        timeText: canonical.timeText || '',
+        locationText: canonical.locationText || '',
+        summary: canonical.summary || '',
+        properties: canonical.properties || {}
+      },
+      evidence,
+      relatedEdges: buildRelatedEdgeSummary(req.params.id, req.params.nodeId)
     })
   } catch (error) {
     res.status(500).json({ error: error.message })

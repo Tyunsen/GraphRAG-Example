@@ -1036,6 +1036,7 @@ function aggregateEntityCanonicalRows(graphId, entityRows = [], now = Date.now()
     const properties = {
       ...entry.properties,
       aliases: [...entry.aliases],
+      mergedCanonicalKeys: [...cluster.sourceKeys],
       supportCount,
       paragraphRefs: [...entry.paragraphRefs].sort((a, b) => a - b)
     }
@@ -1109,6 +1110,7 @@ function aggregateEventCanonicalRows(graphId, eventRows = [], entityKeyAliasMap 
     const properties = {
       ...entry.properties,
       aliases: [...entry.aliases],
+      mergedCanonicalKeys: [...cluster.sourceKeys],
       supportCount,
       eventType,
       trigger,

@@ -1,22 +1,8 @@
 <template>
   <div class="graph-list">
-    <div v-if="creating" class="workspace-form">
-      <div class="workspace-form-title">新建工作区</div>
-      <input class="input" v-model="createName" placeholder="工作区名称，例如：伊朗局势跟踪" />
-      <textarea
-        class="input workspace-intent"
-        v-model="createIntent"
-        placeholder="输入这个工作区的总意图，例如：围绕伊朗战争，提取军事打击、核设施、油价、航运风险与外交信号相关的实体、事件与事件链。"
-      />
-      <div class="inline-actions">
-        <button class="btn btn-primary" @click="submitCreate">创建</button>
-        <button class="btn btn-secondary" @click="toggleCreate(false)">取消</button>
-      </div>
-    </div>
-
     <div v-if="graphStore.savedGraphs.length === 0" class="graph-list-empty">
       <p>还没有工作区</p>
-      <button class="empty-create-btn" @click="toggleCreate(true)">创建第一个工作区</button>
+      <button class="empty-create-btn" @click="openCreatePanel">创建第一个工作区</button>
     </div>
 
     <div v-else class="graph-list-items">
@@ -54,6 +40,34 @@
         <button class="btn btn-secondary" @click="cancelEdit">取消</button>
       </div>
     </div>
+
+    <transition name="create-workspace">
+      <div v-if="creating" class="workspace-create-overlay" @click="closeCreatePanel">
+        <div class="workspace-create-card" @click.stop>
+          <div class="workspace-create-kicker">新建工作区</div>
+          <div class="workspace-create-title">先定义意图，再持续导入文档构图</div>
+          <div class="workspace-create-copy">工作区会作为一个持续更新的图谱容器，后续上传文件和会话都挂在这里。</div>
+
+          <div class="workspace-create-fields">
+            <input
+              class="input workspace-create-input"
+              v-model="createName"
+              placeholder="工作区名称，例如：伊朗局势追踪"
+            />
+            <textarea
+              class="input workspace-create-intent"
+              v-model="createIntent"
+              placeholder="输入这个工作区的总意图，例如：围绕伊朗战争，提取军事打击、核设施、油价、航运风险与外交信号相关的实体、事件与事件链。"
+            />
+          </div>
+
+          <div class="workspace-create-actions">
+            <button class="btn btn-secondary" @click="closeCreatePanel">取消</button>
+            <button class="btn btn-primary" :disabled="!createIntent.trim()" @click="submitCreate">创建工作区</button>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -80,16 +94,14 @@ async function loadGraph(graphId) {
   await graphStore.loadGraph(graphId)
 }
 
-function toggleCreate(force) {
-  creating.value = typeof force === 'boolean' ? force : !creating.value
-  if (!creating.value) {
-    createName.value = ''
-    createIntent.value = ''
-  }
+function openCreatePanel() {
+  creating.value = true
 }
 
-function openCreatePanel() {
-  toggleCreate(true)
+function closeCreatePanel() {
+  creating.value = false
+  createName.value = ''
+  createIntent.value = ''
 }
 
 async function submitCreate() {
@@ -98,9 +110,7 @@ async function submitCreate() {
     name: createName.value.trim() || '未命名工作区',
     intentQuery: createIntent.value.trim()
   })
-  createName.value = ''
-  createIntent.value = ''
-  creating.value = false
+  closeCreatePanel()
 }
 
 async function deleteGraph(graphId) {
@@ -292,5 +302,83 @@ defineExpose({ openCreatePanel })
 
 .action-btn-danger {
   color: var(--color-danger);
+}
+
+.workspace-create-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.34);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.workspace-create-card {
+  width: min(640px, calc(100vw - 32px));
+  display: grid;
+  gap: 14px;
+  padding: 28px;
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 249, 252, 0.98));
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.22);
+}
+
+.workspace-create-kicker {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.workspace-create-title {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 700;
+}
+
+.workspace-create-copy {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.workspace-create-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-create-input,
+.workspace-create-intent {
+  width: 100%;
+}
+
+.workspace-create-intent {
+  min-height: 144px;
+  resize: none;
+}
+
+.workspace-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.create-workspace-enter-active,
+.create-workspace-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.create-workspace-enter-from,
+.create-workspace-leave-to {
+  opacity: 0;
+}
+
+.create-workspace-enter-from .workspace-create-card,
+.create-workspace-leave-to .workspace-create-card {
+  transform: translateY(10px) scale(0.99);
 }
 </style>

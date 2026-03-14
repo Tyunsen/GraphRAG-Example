@@ -70,6 +70,56 @@
           </button>
         </div>
 
+        <div v-if="graphStore.selectedNode" class="graph-node-card">
+          <div class="graph-node-card-head">
+            <div>
+              <div class="graph-node-card-kicker">当前节点</div>
+              <div class="graph-node-card-title">{{ graphStore.selectedNode.label }}</div>
+            </div>
+            <div class="graph-node-card-type">{{ graphStore.selectedNode.type || 'default' }}</div>
+          </div>
+
+          <div v-if="nodeExplainLoading" class="graph-node-card-loading">正在加载节点来源...</div>
+
+          <template v-else-if="nodeExplain">
+            <div class="graph-node-card-meta">
+              <span>{{ nodeExplain.canonical?.supportCount || 0 }} 份文件支撑</span>
+              <span>{{ nodeExplain.evidence?.length || 0 }} 条 mention</span>
+            </div>
+
+            <div v-if="nodeExplain.canonical?.aliases?.length" class="graph-node-card-group">
+              <div class="graph-node-card-label">别名</div>
+              <div class="graph-node-tags">
+                <span v-for="alias in nodeExplain.canonical.aliases" :key="alias" class="graph-node-tag">{{ alias }}</span>
+              </div>
+            </div>
+
+            <div
+              v-if="nodeExplain.canonical?.kind === 'event' && (nodeExplain.canonical.subjectKeys?.length || nodeExplain.canonical.objectKeys?.length)"
+              class="graph-node-card-group"
+            >
+              <div class="graph-node-card-label">事件角色</div>
+              <div class="graph-node-role-line">
+                <span v-if="nodeExplain.canonical.subjectKeys?.length">主体 {{ formatRoleKeys(nodeExplain.canonical.subjectKeys) }}</span>
+                <span v-if="nodeExplain.canonical.objectKeys?.length">客体 {{ formatRoleKeys(nodeExplain.canonical.objectKeys) }}</span>
+              </div>
+            </div>
+
+            <div v-if="nodeExplain.evidence?.length" class="graph-node-card-group">
+              <div class="graph-node-card-label">来源</div>
+              <div class="graph-node-evidence-list">
+                <div v-for="item in nodeExplain.evidence.slice(0, 4)" :key="`${item.fileId}-${item.mentionText}-${item.createdAt}`" class="graph-node-evidence-item">
+                  <div class="graph-node-evidence-file">{{ item.fileName }}</div>
+                  <div class="graph-node-evidence-copy">
+                    <span>{{ item.mentionText }}</span>
+                    <span v-if="item.paragraphRefs?.length">第 {{ item.paragraphRefs.join('、') }} 段</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+
         <div class="graph-stage">
           <GraphCanvas />
         </div>
@@ -87,10 +137,13 @@ import ChatPanel from '@/components/rag/ChatPanel.vue'
 import WorkspaceFilesPanel from '@/components/workspace/WorkspaceFilesPanel.vue'
 import { useGraphStore } from '@/stores/graphStore'
 import { useRagStore } from '@/stores/ragStore'
+import { fetchNodeExplainApi } from '@/services/apiClient'
 
 const graphStore = useGraphStore()
 const ragStore = useRagStore()
 const activePanel = ref('chat')
+const nodeExplain = ref(null)
+const nodeExplainLoading = ref(false)
 
 const activeMessage = computed(() =>
   ragStore.messages.find(item => item.id === ragStore.activeMessageId) || null
@@ -106,7 +159,38 @@ const graphPanelTitle = computed(() => {
 
 watch(() => graphStore.currentGraphId, () => {
   activePanel.value = 'chat'
+  nodeExplain.value = null
+  nodeExplainLoading.value = false
 })
+
+watch(
+  () => [graphStore.currentGraphId, graphStore.selectedNode?.id],
+  async ([graphId, nodeId]) => {
+    if (!graphId || !nodeId) {
+      nodeExplain.value = null
+      nodeExplainLoading.value = false
+      return
+    }
+
+    nodeExplainLoading.value = true
+    try {
+      nodeExplain.value = await fetchNodeExplainApi(graphId, nodeId)
+    } catch (error) {
+      console.warn('[GraphView] failed to load node explain:', error.message)
+      nodeExplain.value = null
+    } finally {
+      nodeExplainLoading.value = false
+    }
+  },
+  { immediate: true }
+)
+
+function formatRoleKeys(keys = []) {
+  return keys
+    .map(item => String(item || '').replace(/^(entity|event):/, ''))
+    .filter(Boolean)
+    .join('、')
+}
 </script>
 
 <style scoped>
@@ -284,6 +368,107 @@ watch(() => graphStore.currentGraphId, () => {
   color: var(--color-primary);
   font-size: 12px;
   font-weight: 600;
+}
+
+.graph-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+.graph-node-card {
+  margin: 0 18px 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  display: grid;
+  gap: 10px;
+}
+
+.graph-node-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.graph-node-card-kicker,
+.graph-node-card-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.graph-node-card-title {
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.graph-node-card-type {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.graph-node-card-loading,
+.graph-node-card-meta,
+.graph-node-role-line,
+.graph-node-evidence-copy {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.graph-node-card-meta,
+.graph-node-role-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.graph-node-card-group {
+  display: grid;
+  gap: 6px;
+}
+
+.graph-node-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.graph-node-tag {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(79, 109, 245, 0.08);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.graph-node-evidence-list {
+  display: grid;
+  gap: 8px;
+}
+
+.graph-node-evidence-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.graph-node-evidence-file {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.graph-node-evidence-copy {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .graph-stage {

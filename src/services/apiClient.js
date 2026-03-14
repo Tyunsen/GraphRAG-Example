@@ -35,6 +35,10 @@ export async function fetchWorkspaceContext(graphId, payload) {
   })
 }
 
+export async function fetchNodeExplainApi(graphId, nodeId) {
+  return request(`/workspaces/${graphId}/nodes/${nodeId}/explain`)
+}
+
 export async function saveGraph(graphId, data) {
   return request(`/workspaces/${graphId}`, {
     method: 'PUT',
