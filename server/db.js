@@ -45,6 +45,7 @@ async function initDB() {
   `)
   ensureColumn('graphs', "intentQuery TEXT DEFAULT ''")
   ensureColumn('graphs', "intentSummary TEXT DEFAULT ''")
+  ensureColumn('graphs', "intentProfile TEXT DEFAULT '{}'")
   db.run(`
     CREATE TABLE IF NOT EXISTS nodes (
       id TEXT NOT NULL,
@@ -127,6 +128,9 @@ async function initDB() {
       importedAt INTEGER NOT NULL
     )
   `)
+  ensureColumn('file_chunks', "chunkKind TEXT DEFAULT 'paragraph'")
+  ensureColumn('file_chunks', 'segmentIndex INTEGER DEFAULT 0')
+  ensureColumn('file_chunks', "parentChunkId TEXT DEFAULT ''")
   db.run(`
     CREATE TABLE IF NOT EXISTS file_nodes (
       id TEXT PRIMARY KEY,
@@ -152,6 +156,98 @@ async function initDB() {
       createdAt INTEGER NOT NULL
     )
   `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS entity_mentions (
+      id TEXT PRIMARY KEY,
+      graphId TEXT NOT NULL,
+      fileId TEXT NOT NULL,
+      fileName TEXT NOT NULL,
+      canonicalKey TEXT NOT NULL,
+      mentionText TEXT NOT NULL,
+      entityType TEXT DEFAULT 'default',
+      paragraphRefs TEXT DEFAULT '[]',
+      chunkId TEXT DEFAULT '',
+      properties TEXT DEFAULT '{}',
+      confidence REAL DEFAULT 0.0,
+      createdAt INTEGER NOT NULL
+    )
+  `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS event_mentions (
+      id TEXT PRIMARY KEY,
+      graphId TEXT NOT NULL,
+      fileId TEXT NOT NULL,
+      fileName TEXT NOT NULL,
+      canonicalKey TEXT NOT NULL,
+      label TEXT NOT NULL,
+      eventType TEXT DEFAULT '一般事件',
+      trigger TEXT DEFAULT '',
+      summary TEXT DEFAULT '',
+      subjectKeys TEXT DEFAULT '[]',
+      predicateText TEXT DEFAULT '',
+      objectKeys TEXT DEFAULT '[]',
+      timeText TEXT DEFAULT '',
+      locationText TEXT DEFAULT '',
+      paragraphRefs TEXT DEFAULT '[]',
+      chunkId TEXT DEFAULT '',
+      properties TEXT DEFAULT '{}',
+      confidence REAL DEFAULT 0.0,
+      createdAt INTEGER NOT NULL
+    )
+  `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS relation_mentions (
+      id TEXT PRIMARY KEY,
+      graphId TEXT NOT NULL,
+      fileId TEXT NOT NULL,
+      fileName TEXT NOT NULL,
+      sourceKind TEXT NOT NULL,
+      sourceKey TEXT NOT NULL,
+      targetKind TEXT NOT NULL,
+      targetKey TEXT NOT NULL,
+      label TEXT NOT NULL,
+      paragraphRefs TEXT DEFAULT '[]',
+      chunkId TEXT DEFAULT '',
+      properties TEXT DEFAULT '{}',
+      confidence REAL DEFAULT 0.0,
+      createdAt INTEGER NOT NULL
+    )
+  `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS canonical_entities (
+      id TEXT PRIMARY KEY,
+      graphId TEXT NOT NULL,
+      canonicalKey TEXT NOT NULL,
+      label TEXT NOT NULL,
+      entityType TEXT DEFAULT 'default',
+      aliases TEXT DEFAULT '[]',
+      properties TEXT DEFAULT '{}',
+      supportCount INTEGER DEFAULT 0,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL
+    )
+  `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS canonical_events (
+      id TEXT PRIMARY KEY,
+      graphId TEXT NOT NULL,
+      canonicalKey TEXT NOT NULL,
+      label TEXT NOT NULL,
+      eventType TEXT DEFAULT '一般事件',
+      trigger TEXT DEFAULT '',
+      summary TEXT DEFAULT '',
+      subjectKeys TEXT DEFAULT '[]',
+      predicateText TEXT DEFAULT '',
+      objectKeys TEXT DEFAULT '[]',
+      timeText TEXT DEFAULT '',
+      locationText TEXT DEFAULT '',
+      aliases TEXT DEFAULT '[]',
+      properties TEXT DEFAULT '{}',
+      supportCount INTEGER DEFAULT 0,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL
+    )
+  `)
 
   // Create indexes (IF NOT EXISTS is not supported for indexes in sql.js, use try/catch)
   const indexes = [
@@ -164,10 +260,19 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_files_graphId ON files(graphId)',
     'CREATE INDEX IF NOT EXISTS idx_file_chunks_graphId ON file_chunks(graphId)',
     'CREATE INDEX IF NOT EXISTS idx_file_chunks_fileId ON file_chunks(fileId)',
+    'CREATE INDEX IF NOT EXISTS idx_file_chunks_kind ON file_chunks(graphId, chunkKind)',
     'CREATE INDEX IF NOT EXISTS idx_file_nodes_graphId ON file_nodes(graphId)',
     'CREATE INDEX IF NOT EXISTS idx_file_nodes_fileId ON file_nodes(fileId)',
     'CREATE INDEX IF NOT EXISTS idx_file_edges_graphId ON file_edges(graphId)',
     'CREATE INDEX IF NOT EXISTS idx_file_edges_fileId ON file_edges(fileId)',
+    'CREATE INDEX IF NOT EXISTS idx_entity_mentions_graphId ON entity_mentions(graphId)',
+    'CREATE INDEX IF NOT EXISTS idx_entity_mentions_fileId ON entity_mentions(fileId)',
+    'CREATE INDEX IF NOT EXISTS idx_event_mentions_graphId ON event_mentions(graphId)',
+    'CREATE INDEX IF NOT EXISTS idx_event_mentions_fileId ON event_mentions(fileId)',
+    'CREATE INDEX IF NOT EXISTS idx_relation_mentions_graphId ON relation_mentions(graphId)',
+    'CREATE INDEX IF NOT EXISTS idx_relation_mentions_fileId ON relation_mentions(fileId)',
+    'CREATE INDEX IF NOT EXISTS idx_canonical_entities_graphId ON canonical_entities(graphId)',
+    'CREATE INDEX IF NOT EXISTS idx_canonical_events_graphId ON canonical_events(graphId)',
   ]
   for (const sql of indexes) {
     try { db.run(sql) } catch { /* index may already exist */ }

@@ -1,0 +1,933 @@
+import { createHash } from 'crypto'
+
+const EVENT_NODE_TYPE = '事件'
+const AGENT_RELATIONS = new Set(['发起', '执行', '参与', '宣布', '支持', '领导', '指挥'])
+const OBJECT_RELATIONS = new Set(['针对', '受影响', '造成', '影响', '打击'])
+const LOCATION_RELATIONS = new Set(['发生于', '位于'])
+const DEFAULT_RELATION = '关联'
+
+function dedupe(values = []) {
+  return [...new Set(values.filter(Boolean))]
+}
+
+function parseJson(value, fallback) {
+  try {
+    return value ? JSON.parse(value) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function uniqueIntegers(values = []) {
+  return [...new Set(values.map(value => Number(value)).filter(value => Number.isInteger(value) && value > 0))].sort((a, b) => a - b)
+}
+
+function isObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeNodeType(type = '') {
+  return /事件|event/i.test(String(type || '').trim()) ? EVENT_NODE_TYPE : String(type || 'default').trim() || 'default'
+}
+
+function normalizeRelationLabel(label = '') {
+  return String(label || '').trim() || DEFAULT_RELATION
+}
+
+function pickLongestText(values = []) {
+  return values
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)[0] || ''
+}
+
+function pickMostFrequent(values = []) {
+  const counter = new Map()
+  for (const value of values) {
+    const text = String(value || '').trim()
+    if (!text) continue
+    counter.set(text, (counter.get(text) || 0) + 1)
+  }
+
+  return [...counter.entries()]
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .map(([text]) => text)[0] || ''
+}
+
+function mergeProperties(base = {}, next = {}) {
+  const output = { ...base }
+  for (const [key, value] of Object.entries(next || {})) {
+    if (value == null) continue
+
+    if (Array.isArray(value)) {
+      const existing = Array.isArray(output[key]) ? output[key] : []
+      output[key] = dedupe([...existing, ...value.map(item => String(item || '').trim())])
+      continue
+    }
+
+    if (isObject(value)) {
+      output[key] = { ...(isObject(output[key]) ? output[key] : {}), ...value }
+      continue
+    }
+
+    const nextText = String(value).trim()
+    if (!nextText) continue
+    const currentText = String(output[key] || '').trim()
+    output[key] = nextText.length >= currentText.length ? value : output[key]
+  }
+  return output
+}
+
+export function normalizeLabel(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
+export function makeStableId(prefix, value) {
+  const digest = createHash('md5').update(String(value || '')).digest('hex').slice(0, 16)
+  return `${prefix}_${digest}`
+}
+
+export function splitIntoParagraphs(content = '') {
+  const normalized = String(content || '').replace(/\r\n/g, '\n')
+  const paragraphs = normalized
+    .split(/\n{2,}/)
+    .map(part => part.trim())
+    .filter(Boolean)
+
+  if (paragraphs.length > 0) return paragraphs
+
+  return normalized
+    .split('\n')
+    .map(part => part.trim())
+    .filter(Boolean)
+}
+
+export function buildSegments(paragraphs = [], maxChars = 1000) {
+  const segments = []
+  let currentContent = []
+  let currentParagraphIndexes = []
+  let currentLength = 0
+  let segmentIndex = 1
+
+  for (let index = 0; index < paragraphs.length; index++) {
+    const paragraph = String(paragraphs[index] || '').trim()
+    if (!paragraph) continue
+
+    const nextLength = currentLength + paragraph.length + (currentContent.length > 0 ? 2 : 0)
+    if (currentContent.length > 0 && nextLength > maxChars) {
+      segments.push({
+        id: '',
+        segmentIndex,
+        paragraphIndexes: [...currentParagraphIndexes],
+        content: currentContent.join('\n\n')
+      })
+      segmentIndex += 1
+      currentContent = []
+      currentParagraphIndexes = []
+      currentLength = 0
+    }
+
+    currentContent.push(paragraph)
+    currentParagraphIndexes.push(index + 1)
+    currentLength += paragraph.length + (currentContent.length > 1 ? 2 : 0)
+  }
+
+  if (currentContent.length > 0) {
+    segments.push({
+      id: '',
+      segmentIndex,
+      paragraphIndexes: [...currentParagraphIndexes],
+      content: currentContent.join('\n\n')
+    })
+  }
+
+  return segments
+}
+
+function inferEventType(label = '', fallback = '') {
+  const text = `${label} ${fallback}`.trim()
+  if (!text) return '一般事件'
+  if (/空袭|轰炸|打击|袭击/.test(text)) return '军事打击'
+  if (/导弹|发射|拦截/.test(text)) return '导弹行动'
+  if (/制裁|施压/.test(text)) return '制裁施压'
+  if (/谈判|停火|会谈/.test(text)) return '外交谈判'
+  if (/油价|经济|航运|海峡/.test(text)) return '经济波动'
+  if (/领导|继任|政权/.test(text)) return '政治变动'
+  return fallback || '一般事件'
+}
+
+function coerceStringArray(value) {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item || '').trim()).filter(Boolean)
+  }
+  const text = String(value || '').trim()
+  return text ? [text] : []
+}
+
+function buildPreparedNodes(extractedNodes = [], extractedEdges = []) {
+  const nodeMap = new Map()
+
+  for (const node of extractedNodes || []) {
+    const label = String(node?.label || '').trim()
+    if (!label) continue
+
+    const type = normalizeNodeType(node.type)
+    const properties = isObject(node.properties) ? node.properties : {}
+    const existing = nodeMap.get(label)
+
+    if (!existing) {
+      nodeMap.set(label, { label, type, properties })
+      continue
+    }
+
+    existing.type = existing.type === 'default' ? type : existing.type
+    existing.properties = mergeProperties(existing.properties, properties)
+  }
+
+  for (const edge of extractedEdges || []) {
+    const source = String(edge?.source || '').trim()
+    const target = String(edge?.target || '').trim()
+    if (source && !nodeMap.has(source)) nodeMap.set(source, { label: source, type: 'default', properties: {} })
+    if (target && !nodeMap.has(target)) nodeMap.set(target, { label: target, type: 'default', properties: {} })
+  }
+
+  for (const node of [...nodeMap.values()]) {
+    if (node.type !== EVENT_NODE_TYPE) continue
+    const properties = node.properties || {}
+
+    for (const label of [
+      ...coerceStringArray(properties.subject),
+      ...coerceStringArray(properties.object),
+      ...coerceStringArray(properties.location)
+    ]) {
+      if (!label || nodeMap.has(label)) continue
+      nodeMap.set(label, { label, type: 'default', properties: {} })
+    }
+  }
+
+  return [...nodeMap.values()]
+}
+
+function buildMentionsByParagraphMap() {
+  return new Map()
+}
+
+function pushMentionRef(mentionsByParagraph, paragraphRefs, kind, label) {
+  for (const paragraphIndex of paragraphRefs) {
+    if (!mentionsByParagraph.has(paragraphIndex)) {
+      mentionsByParagraph.set(paragraphIndex, { entities: [], events: [] })
+    }
+
+    if (kind === 'event') mentionsByParagraph.get(paragraphIndex).events.push(label)
+    else mentionsByParagraph.get(paragraphIndex).entities.push(label)
+  }
+}
+
+function findParagraphRefs(paragraphs, label, fallback = [1]) {
+  const refs = []
+  const target = String(label || '').trim()
+  if (!target) return uniqueIntegers(fallback)
+
+  for (let index = 0; index < paragraphs.length; index++) {
+    if (paragraphs[index].includes(target)) refs.push(index + 1)
+  }
+
+  return uniqueIntegers(refs.length > 0 ? refs : fallback)
+}
+
+function buildSegmentRows(graphId, fileId, fileName, segments, mentionsByParagraph, importedAt) {
+  return segments.map(segment => {
+    const entityLabels = []
+    const eventLabels = []
+
+    for (const paragraphIndex of segment.paragraphIndexes) {
+      const bucket = mentionsByParagraph.get(paragraphIndex)
+      if (!bucket) continue
+      entityLabels.push(...bucket.entities)
+      eventLabels.push(...bucket.events)
+    }
+
+    return {
+      id: `${fileId}_segment_${segment.segmentIndex}`,
+      graphId,
+      fileId,
+      fileName,
+      paragraphIndex: segment.paragraphIndexes[0] || segment.segmentIndex,
+      content: segment.content,
+      linkedNodes: JSON.stringify(dedupe(entityLabels)),
+      linkedEvents: JSON.stringify(dedupe(eventLabels)),
+      importedAt,
+      chunkKind: 'segment',
+      segmentIndex: segment.segmentIndex,
+      parentChunkId: ''
+    }
+  })
+}
+
+function buildParagraphRows(graphId, fileId, fileName, paragraphs, mentionsByParagraph, importedAt) {
+  return paragraphs.map((paragraph, index) => {
+    const paragraphIndex = index + 1
+    const bucket = mentionsByParagraph.get(paragraphIndex) || { entities: [], events: [] }
+
+    return {
+      id: `${fileId}_paragraph_${paragraphIndex}`,
+      graphId,
+      fileId,
+      fileName,
+      paragraphIndex,
+      content: paragraph,
+      linkedNodes: JSON.stringify(dedupe(bucket.entities)),
+      linkedEvents: JSON.stringify(dedupe(bucket.events)),
+      importedAt,
+      chunkKind: 'paragraph',
+      segmentIndex: 0,
+      parentChunkId: ''
+    }
+  })
+}
+
+function findSegmentIdForParagraphRefs(segmentRows, paragraphRefs = []) {
+  const sortedRefs = uniqueIntegers(paragraphRefs)
+  for (const row of segmentRows) {
+    const indexes = Array.isArray(row.paragraphIndexes) ? row.paragraphIndexes : []
+    if (indexes.some(index => sortedRefs.includes(index))) return row.id
+  }
+  return segmentRows[0]?.id || ''
+}
+
+function collectRelationIndex(edges = [], nodeTypeMap = new Map()) {
+  const inbound = new Map()
+  const outbound = new Map()
+
+  for (const edge of edges) {
+    const source = String(edge?.source || '').trim()
+    const target = String(edge?.target || '').trim()
+    if (!source || !target) continue
+
+    const normalized = {
+      source,
+      target,
+      label: normalizeRelationLabel(edge.label),
+      properties: isObject(edge.properties) ? edge.properties : {},
+      sourceType: normalizeNodeType(nodeTypeMap.get(source) || ''),
+      targetType: normalizeNodeType(nodeTypeMap.get(target) || '')
+    }
+
+    if (!outbound.has(source)) outbound.set(source, [])
+    if (!inbound.has(target)) inbound.set(target, [])
+    outbound.get(source).push(normalized)
+    inbound.get(target).push(normalized)
+  }
+
+  return { inbound, outbound }
+}
+
+export function buildKnowledgeRecords(
+  graphId,
+  fileId,
+  fileName,
+  content,
+  extractedNodes = [],
+  extractedEdges = [],
+  now = Date.now()
+) {
+  const paragraphs = splitIntoParagraphs(content)
+  const preparedNodes = buildPreparedNodes(extractedNodes, extractedEdges)
+  const nodeTypeMap = new Map(preparedNodes.map(node => [node.label, normalizeNodeType(node.type)]))
+  const relationIndex = collectRelationIndex(extractedEdges, nodeTypeMap)
+  const mentionsByParagraph = buildMentionsByParagraphMap()
+
+  const segments = buildSegments(paragraphs).map(segment => ({
+    ...segment,
+    id: `${fileId}_segment_${segment.segmentIndex}`
+  }))
+
+  const entityMentions = []
+  const eventMentions = []
+  const relationMentions = []
+  const paragraphRefsByNode = new Map()
+  const canonicalKindByKey = new Map()
+  const fileNodes = []
+  const fileEdges = []
+
+  for (const node of preparedNodes) {
+    const label = String(node.label || '').trim()
+    if (!label) continue
+
+    const nodeType = normalizeNodeType(node.type)
+    const paragraphRefs = findParagraphRefs(paragraphs, label, [1])
+    const chunkId = findSegmentIdForParagraphRefs(segments, paragraphRefs)
+    paragraphRefsByNode.set(label, paragraphRefs)
+    const canonicalKey = `${nodeType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${normalizeLabel(label)}`
+    canonicalKindByKey.set(canonicalKey, nodeType === EVENT_NODE_TYPE ? 'event' : 'entity')
+
+    if (nodeType === EVENT_NODE_TYPE) {
+      const inbound = relationIndex.inbound.get(label) || []
+      const outbound = relationIndex.outbound.get(label) || []
+      const properties = isObject(node.properties) ? node.properties : {}
+
+      const subjectKeys = dedupe([
+        ...inbound
+          .filter(edge => edge.sourceType !== EVENT_NODE_TYPE && AGENT_RELATIONS.has(edge.label))
+          .map(edge => `entity:${normalizeLabel(edge.source)}`),
+        ...coerceStringArray(properties.subject).map(item => `entity:${normalizeLabel(item)}`)
+      ])
+
+      const objectKeys = dedupe([
+        ...outbound
+          .filter(edge => edge.targetType !== EVENT_NODE_TYPE && OBJECT_RELATIONS.has(edge.label))
+          .map(edge => `entity:${normalizeLabel(edge.target)}`),
+        ...coerceStringArray(properties.object).map(item => `entity:${normalizeLabel(item)}`)
+      ])
+
+      const eventType = inferEventType(label, String(properties.eventType || '').trim())
+      const trigger = String(properties.trigger || label).trim()
+      const predicateText = String(properties.predicate || pickMostFrequent([
+        ...outbound.map(edge => edge.label),
+        ...inbound.map(edge => edge.label)
+      ]) || trigger).trim()
+      const locationText = String(
+        properties.location ||
+        pickLongestText(outbound
+          .filter(edge => edge.targetType !== EVENT_NODE_TYPE && LOCATION_RELATIONS.has(edge.label))
+          .map(edge => edge.target))
+      ).trim()
+      const timeText = String(
+        properties.time ||
+        properties.date ||
+        properties.occurredAt ||
+        ''
+      ).trim()
+      const summary = String(properties.summary || label).trim()
+
+      eventMentions.push({
+        id: makeStableId('em', `${fileId}|${canonicalKey}|${label}|${paragraphRefs.join(',')}`),
+        graphId,
+        fileId,
+        fileName,
+        canonicalKey,
+        label,
+        eventType,
+        trigger,
+        summary,
+        subjectKeys: JSON.stringify(subjectKeys),
+        predicateText,
+        objectKeys: JSON.stringify(objectKeys),
+        timeText,
+        locationText,
+        paragraphRefs: JSON.stringify(paragraphRefs),
+        chunkId,
+        properties: JSON.stringify(properties),
+        confidence: Number(properties.confidence || 0.85),
+        createdAt: now
+      })
+
+      pushMentionRef(mentionsByParagraph, paragraphRefs, 'event', label)
+      fileNodes.push({
+        id: makeStableId('fn', `${fileId}|${label}`),
+        graphId,
+        fileId,
+        fileName,
+        nodeLabel: label,
+        nodeType: EVENT_NODE_TYPE,
+        nodeProperties: JSON.stringify({
+          ...properties,
+          eventType,
+          trigger,
+          summary
+        }),
+        createdAt: now
+      })
+
+      continue
+    }
+
+    const properties = isObject(node.properties) ? node.properties : {}
+    entityMentions.push({
+      id: makeStableId('en', `${fileId}|${canonicalKey}|${label}|${paragraphRefs.join(',')}`),
+      graphId,
+      fileId,
+      fileName,
+      canonicalKey,
+      mentionText: label,
+      entityType: nodeType,
+      paragraphRefs: JSON.stringify(paragraphRefs),
+      chunkId,
+      properties: JSON.stringify(properties),
+      confidence: Number(properties.confidence || 0.85),
+      createdAt: now
+    })
+
+    pushMentionRef(mentionsByParagraph, paragraphRefs, 'entity', label)
+    fileNodes.push({
+      id: makeStableId('fn', `${fileId}|${label}`),
+      graphId,
+      fileId,
+      fileName,
+      nodeLabel: label,
+      nodeType,
+      nodeProperties: JSON.stringify(properties),
+      createdAt: now
+    })
+  }
+
+  for (const edge of extractedEdges || []) {
+    const sourceLabel = String(edge?.source || '').trim()
+    const targetLabel = String(edge?.target || '').trim()
+    if (!sourceLabel || !targetLabel) continue
+
+    const sourceType = normalizeNodeType(nodeTypeMap.get(sourceLabel) || '')
+    const targetType = normalizeNodeType(nodeTypeMap.get(targetLabel) || '')
+    const sourceKey = `${sourceType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${normalizeLabel(sourceLabel)}`
+    const targetKey = `${targetType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${normalizeLabel(targetLabel)}`
+    const paragraphRefs = uniqueIntegers([
+      ...(paragraphRefsByNode.get(sourceLabel) || []),
+      ...(paragraphRefsByNode.get(targetLabel) || [])
+    ])
+    const chunkId = findSegmentIdForParagraphRefs(segments, paragraphRefs)
+    const label = normalizeRelationLabel(edge.label)
+    const properties = isObject(edge.properties) ? edge.properties : {}
+
+    relationMentions.push({
+      id: makeStableId('rm', `${fileId}|${sourceKey}|${targetKey}|${label}|${paragraphRefs.join(',')}`),
+      graphId,
+      fileId,
+      fileName,
+      sourceKind: sourceType === EVENT_NODE_TYPE ? 'event' : 'entity',
+      sourceKey,
+      targetKind: targetType === EVENT_NODE_TYPE ? 'event' : 'entity',
+      targetKey,
+      label,
+      paragraphRefs: JSON.stringify(paragraphRefs),
+      chunkId,
+      properties: JSON.stringify(properties),
+      confidence: Number(properties.confidence || 0.8),
+      createdAt: now
+    })
+
+    fileEdges.push({
+      id: makeStableId('fe', `${fileId}|${sourceLabel}|${targetLabel}|${label}`),
+      graphId,
+      fileId,
+      fileName,
+      sourceLabel,
+      targetLabel,
+      label,
+      edgeProperties: JSON.stringify(properties),
+      createdAt: now
+    })
+
+    canonicalKindByKey.set(sourceKey, sourceType === EVENT_NODE_TYPE ? 'event' : 'entity')
+    canonicalKindByKey.set(targetKey, targetType === EVENT_NODE_TYPE ? 'event' : 'entity')
+  }
+
+  const paragraphRows = buildParagraphRows(
+    graphId,
+    fileId,
+    fileName,
+    paragraphs,
+    mentionsByParagraph,
+    now
+  )
+  const segmentRows = buildSegmentRows(
+    graphId,
+    fileId,
+    fileName,
+    segments,
+    mentionsByParagraph,
+    now
+  )
+
+  return {
+    paragraphs,
+    paragraphRows,
+    segmentRows,
+    entityMentions,
+    eventMentions,
+    relationMentions,
+    fileNodes,
+    fileEdges,
+    counts: {
+      paragraphCount: paragraphRows.length,
+      segmentCount: segmentRows.length,
+      entityMentionCount: entityMentions.length,
+      eventMentionCount: eventMentions.length,
+      relationMentionCount: relationMentions.length
+    }
+  }
+}
+
+function aggregateEntityCanonicalRows(graphId, entityRows = [], now = Date.now()) {
+  const entityMap = new Map()
+
+  for (const row of entityRows) {
+    const key = String(row.canonicalKey || '').trim()
+    if (!key) continue
+
+    if (!entityMap.has(key)) {
+      entityMap.set(key, {
+        key,
+        labels: [],
+        entityTypes: [],
+        aliases: new Set(),
+        properties: {},
+        fileIds: new Set(),
+        fileNames: new Set(),
+        paragraphRefs: new Set(),
+        createdAt: Number(row.createdAt || now)
+      })
+    }
+
+    const entry = entityMap.get(key)
+    entry.labels.push(row.mentionText)
+    entry.entityTypes.push(row.entityType)
+    entry.aliases.add(row.mentionText)
+    entry.properties = mergeProperties(entry.properties, parseJson(row.properties, {}))
+    entry.fileIds.add(row.fileId)
+    if (row.fileName) entry.fileNames.add(row.fileName)
+    for (const paragraphIndex of parseJson(row.paragraphRefs, [])) {
+      entry.paragraphRefs.add(Number(paragraphIndex))
+    }
+    entry.createdAt = Math.min(entry.createdAt, Number(row.createdAt || now))
+  }
+
+  return [...entityMap.values()].map(entry => {
+    const label = pickMostFrequent(entry.labels)
+    const entityType = pickMostFrequent(entry.entityTypes) || 'default'
+    const supportCount = entry.fileIds.size
+    const properties = {
+      ...entry.properties,
+      aliases: [...entry.aliases],
+      supportCount,
+      paragraphRefs: [...entry.paragraphRefs].sort((a, b) => a - b)
+    }
+
+    return {
+      id: makeStableId('ce', entry.key),
+      graphId,
+      canonicalKey: entry.key,
+      label,
+      entityType,
+      aliases: JSON.stringify([...entry.aliases]),
+      properties: JSON.stringify(properties),
+      supportCount,
+      createdAt: entry.createdAt,
+      updatedAt: now,
+      nodeId: makeStableId('n', entry.key),
+      sourceFile: [...entry.fileNames][0] || ''
+    }
+  })
+}
+
+function aggregateEventCanonicalRows(graphId, eventRows = [], now = Date.now()) {
+  const eventMap = new Map()
+
+  for (const row of eventRows) {
+    const key = String(row.canonicalKey || '').trim()
+    if (!key) continue
+
+    if (!eventMap.has(key)) {
+      eventMap.set(key, {
+        key,
+        labels: [],
+        eventTypes: [],
+        triggers: [],
+        predicateTexts: [],
+        summaries: [],
+        subjectKeys: new Set(),
+        objectKeys: new Set(),
+        timeTexts: [],
+        locationTexts: [],
+        aliases: new Set(),
+        properties: {},
+        fileIds: new Set(),
+        fileNames: new Set(),
+        paragraphRefs: new Set(),
+        createdAt: Number(row.createdAt || now)
+      })
+    }
+
+    const entry = eventMap.get(key)
+    entry.labels.push(row.label)
+    entry.eventTypes.push(row.eventType)
+    entry.triggers.push(row.trigger)
+    entry.predicateTexts.push(row.predicateText)
+    entry.summaries.push(row.summary)
+    entry.aliases.add(row.label)
+    entry.properties = mergeProperties(entry.properties, parseJson(row.properties, {}))
+    entry.fileIds.add(row.fileId)
+    if (row.fileName) entry.fileNames.add(row.fileName)
+    for (const subjectKey of parseJson(row.subjectKeys, [])) entry.subjectKeys.add(subjectKey)
+    for (const objectKey of parseJson(row.objectKeys, [])) entry.objectKeys.add(objectKey)
+    for (const paragraphIndex of parseJson(row.paragraphRefs, [])) {
+      entry.paragraphRefs.add(Number(paragraphIndex))
+    }
+    if (row.timeText) entry.timeTexts.push(row.timeText)
+    if (row.locationText) entry.locationTexts.push(row.locationText)
+    entry.createdAt = Math.min(entry.createdAt, Number(row.createdAt || now))
+  }
+
+  return [...eventMap.values()].map(entry => {
+    const label = pickMostFrequent(entry.labels)
+    const eventType = pickMostFrequent(entry.eventTypes) || '一般事件'
+    const trigger = pickMostFrequent(entry.triggers) || label
+    const predicateText = pickMostFrequent(entry.predicateTexts) || trigger
+    const summary = pickLongestText(entry.summaries) || label
+    const timeText = pickMostFrequent(entry.timeTexts)
+    const locationText = pickMostFrequent(entry.locationTexts)
+    const supportCount = entry.fileIds.size
+    const subjectKeys = [...entry.subjectKeys]
+    const objectKeys = [...entry.objectKeys]
+    const properties = {
+      ...entry.properties,
+      aliases: [...entry.aliases],
+      supportCount,
+      eventType,
+      trigger,
+      predicateText,
+      summary,
+      timeText,
+      locationText,
+      subjectKeys,
+      objectKeys,
+      paragraphRefs: [...entry.paragraphRefs].sort((a, b) => a - b)
+    }
+
+    return {
+      id: makeStableId('cv', entry.key),
+      graphId,
+      canonicalKey: entry.key,
+      label,
+      eventType,
+      trigger,
+      summary,
+      subjectKeys: JSON.stringify(subjectKeys),
+      predicateText,
+      objectKeys: JSON.stringify(objectKeys),
+      timeText,
+      locationText,
+      aliases: JSON.stringify([...entry.aliases]),
+      properties: JSON.stringify(properties),
+      supportCount,
+      createdAt: entry.createdAt,
+      updatedAt: now,
+      nodeId: makeStableId('n', entry.key),
+      sourceFile: [...entry.fileNames][0] || ''
+    }
+  })
+}
+
+function aggregateEdgeRows(graphId, relationRows = [], nodeIdByKey = new Map(), now = Date.now()) {
+  const edgeMap = new Map()
+
+  for (const row of relationRows) {
+    const sourceKey = String(row.sourceKey || '').trim()
+    const targetKey = String(row.targetKey || '').trim()
+    const label = normalizeRelationLabel(row.label)
+    if (!sourceKey || !targetKey) continue
+    if (!nodeIdByKey.has(sourceKey) || !nodeIdByKey.has(targetKey)) continue
+
+    const aggregateKey = `${sourceKey}|${targetKey}|${label}`
+    if (!edgeMap.has(aggregateKey)) {
+      edgeMap.set(aggregateKey, {
+        key: aggregateKey,
+        graphId,
+        sourceKey,
+        targetKey,
+        label,
+        source: nodeIdByKey.get(sourceKey),
+        target: nodeIdByKey.get(targetKey),
+        fileIds: new Set(),
+        fileNames: new Set(),
+        paragraphRefs: new Set(),
+        properties: {},
+        createdAt: Number(row.createdAt || now),
+        weight: 0
+      })
+    }
+
+    const entry = edgeMap.get(aggregateKey)
+    entry.weight += 1
+    entry.fileIds.add(row.fileId)
+    if (row.fileName) entry.fileNames.add(row.fileName)
+    entry.properties = mergeProperties(entry.properties, parseJson(row.properties, {}))
+    for (const paragraphIndex of parseJson(row.paragraphRefs, [])) {
+      entry.paragraphRefs.add(Number(paragraphIndex))
+    }
+    entry.createdAt = Math.min(entry.createdAt, Number(row.createdAt || now))
+  }
+
+  return [...edgeMap.values()].map(entry => {
+    const supportCount = entry.fileIds.size
+    return {
+      id: makeStableId('e', entry.key),
+      graphId,
+      source: entry.source,
+      target: entry.target,
+      label: entry.label,
+      weight: entry.weight,
+      properties: JSON.stringify({
+        ...entry.properties,
+        supportCount,
+        paragraphRefs: [...entry.paragraphRefs].sort((a, b) => a - b)
+      }),
+      sourceFile: [...entry.fileNames][0] || '',
+      createdAt: entry.createdAt
+    }
+  })
+}
+
+export function rebuildCanonicalGraph(graphId, allRows, run) {
+  const now = Date.now()
+  const entityRows = allRows(
+    `
+    SELECT *
+    FROM entity_mentions
+    WHERE graphId = ?
+    ORDER BY createdAt ASC
+    `,
+    [graphId]
+  )
+  const eventRows = allRows(
+    `
+    SELECT *
+    FROM event_mentions
+    WHERE graphId = ?
+    ORDER BY createdAt ASC
+    `,
+    [graphId]
+  )
+  const relationRows = allRows(
+    `
+    SELECT *
+    FROM relation_mentions
+    WHERE graphId = ?
+    ORDER BY createdAt ASC
+    `,
+    [graphId]
+  )
+
+  const canonicalEntities = aggregateEntityCanonicalRows(graphId, entityRows, now)
+  const canonicalEvents = aggregateEventCanonicalRows(graphId, eventRows, now)
+  const nodeIdByKey = new Map()
+
+  run('DELETE FROM canonical_entities WHERE graphId = ?', [graphId])
+  run('DELETE FROM canonical_events WHERE graphId = ?', [graphId])
+  run('DELETE FROM nodes WHERE graphId = ?', [graphId])
+  run('DELETE FROM edges WHERE graphId = ?', [graphId])
+
+  for (const entity of canonicalEntities) {
+    nodeIdByKey.set(entity.canonicalKey, entity.nodeId)
+    run(
+      `
+      INSERT INTO canonical_entities (id, graphId, canonicalKey, label, entityType, aliases, properties, supportCount, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        entity.id,
+        graphId,
+        entity.canonicalKey,
+        entity.label,
+        entity.entityType,
+        entity.aliases,
+        entity.properties,
+        entity.supportCount,
+        entity.createdAt,
+        entity.updatedAt
+      ]
+    )
+    run(
+      `
+      INSERT INTO nodes (id, graphId, label, type, properties, sourceFile, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        entity.nodeId,
+        graphId,
+        entity.label,
+        entity.entityType,
+        entity.properties,
+        entity.sourceFile,
+        entity.createdAt
+      ]
+    )
+  }
+
+  for (const event of canonicalEvents) {
+    nodeIdByKey.set(event.canonicalKey, event.nodeId)
+    run(
+      `
+      INSERT INTO canonical_events (id, graphId, canonicalKey, label, eventType, trigger, summary, subjectKeys, predicateText, objectKeys, timeText, locationText, aliases, properties, supportCount, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        event.id,
+        graphId,
+        event.canonicalKey,
+        event.label,
+        event.eventType,
+        event.trigger,
+        event.summary,
+        event.subjectKeys,
+        event.predicateText,
+        event.objectKeys,
+        event.timeText,
+        event.locationText,
+        event.aliases,
+        event.properties,
+        event.supportCount,
+        event.createdAt,
+        event.updatedAt
+      ]
+    )
+    run(
+      `
+      INSERT INTO nodes (id, graphId, label, type, properties, sourceFile, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        event.nodeId,
+        graphId,
+        event.label,
+        EVENT_NODE_TYPE,
+        event.properties,
+        event.sourceFile,
+        event.createdAt
+      ]
+    )
+  }
+
+  const edges = aggregateEdgeRows(graphId, relationRows, nodeIdByKey, now)
+  for (const edge of edges) {
+    run(
+      `
+      INSERT INTO edges (id, graphId, source, target, label, weight, properties, sourceFile, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        edge.id,
+        graphId,
+        edge.source,
+        edge.target,
+        edge.label,
+        edge.weight,
+        edge.properties,
+        edge.sourceFile,
+        edge.createdAt
+      ]
+    )
+  }
+
+  run(
+    'UPDATE graphs SET nodeCount = ?, edgeCount = ?, updatedAt = ? WHERE id = ?',
+    [canonicalEntities.length + canonicalEvents.length, edges.length, now, graphId]
+  )
+
+  return {
+    nodeCount: canonicalEntities.length + canonicalEvents.length,
+    edgeCount: edges.length
+  }
+}
