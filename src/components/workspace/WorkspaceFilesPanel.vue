@@ -13,8 +13,8 @@
     <div v-if="importStore.hasActivity" class="process-card">
       <div class="process-head">
         <div>
-          <div class="process-title">导入进度</div>
-          <div class="process-file">{{ importStore.currentFileName || '等待文件' }}</div>
+          <div class="process-title">导入任务</div>
+          <div class="process-file">{{ importSummary }}</div>
         </div>
         <button class="process-clear" @click="importStore.clearProcess()">清除</button>
       </div>
@@ -28,21 +28,42 @@
         <div class="progress-bar" :class="{ error: Boolean(importStore.parseError) }" :style="{ width: `${progressPercent}%` }"></div>
       </div>
 
-      <div class="stage-pills">
+      <div v-if="activeStageDetail" class="progress-detail">{{ activeStageDetail }}</div>
+
+      <div v-if="taskItems.length" class="task-list">
         <div
-          v-for="stage in importStore.stages"
-          :key="stage.key"
-          class="stage-pill"
-          :class="`stage-${stage.status}`"
+          v-for="item in taskItems"
+          :key="item.id"
+          class="task-item"
+          :class="`task-${item.status}`"
         >
-          <span class="stage-pill-dot"></span>
-          <span>{{ stage.label }}</span>
+          <div class="task-item-head">
+            <div class="task-item-name">{{ item.fileName }}</div>
+            <div class="task-item-state">{{ formatTaskState(item) }}</div>
+          </div>
+          <div class="task-item-track">
+            <div class="task-item-bar" :style="{ width: `${getTaskProgress(item)}%` }"></div>
+          </div>
+          <div v-if="item.stages?.length" class="task-item-stages">
+            <span
+              v-for="stage in item.stages"
+              :key="`${item.id}-${stage.key}`"
+              class="task-stage-dot"
+              :class="`task-stage-${stage.status}`"
+            ></span>
+          </div>
+          <div v-if="item.summary" class="task-item-meta">
+            {{ item.summary.method }} · {{ item.summary.nodeCount }} 节点 · {{ item.summary.edgeCount }} 关系
+          </div>
+          <div v-else-if="item.error" class="task-item-error">{{ item.error }}</div>
         </div>
       </div>
 
-      <div v-if="activeStageDetail" class="progress-detail">{{ activeStageDetail }}</div>
-
       <div v-if="importStore.extractionSummary" class="summary-card">
+        <div class="summary-line">
+          <span>当前文件</span>
+          <strong>{{ importStore.currentFileName || '未开始' }}</strong>
+        </div>
         <div class="summary-line">
           <span>方式</span>
           <strong>{{ importStore.extractionSummary.method }}</strong>
@@ -60,7 +81,7 @@
       </div>
 
       <details v-if="importStore.processLogs.length" class="process-details">
-        <summary>查看详细过程</summary>
+        <summary>查看当前文件日志</summary>
         <div class="log-list">
           <div v-for="line in importStore.processLogs" :key="line" class="log-line">{{ line }}</div>
         </div>
@@ -100,52 +121,53 @@ const importStore = useImportStore()
 const workspaceFiles = ref([])
 const filesLoading = ref(false)
 
+const taskItems = computed(() => importStore.jobItems || [])
+
 const progressPercent = computed(() => {
+  if (importStore.totalCount) return importStore.overallProgress
+
   const stages = importStore.stages
   if (!stages.length) return 0
 
   const total = stages.length
   let progress = 0
-
   stages.forEach((stage, index) => {
-    if (stage.status === 'done') {
-      progress += 1
-      return
-    }
-    if (stage.status === 'running') {
-      progress += 0.55
-      return
-    }
-    if (stage.status === 'ready') {
-      progress += 0.82
-      return
-    }
-    if (stage.status === 'error') {
-      progress = Math.max(progress, index + 0.35)
-    }
+    if (stage.status === 'done') progress += 1
+    else if (stage.status === 'running') progress += 0.55
+    else if (stage.status === 'ready') progress += 0.82
+    else if (stage.status === 'error') progress = Math.max(progress, index + 0.35)
   })
-
   return Math.min(100, Math.max(0, Math.round((progress / total) * 100)))
 })
 
 const progressLabel = computed(() => {
   if (importStore.parseError) return '处理失败'
+  if (importStore.totalCount) {
+    if (importStore.completedCount + importStore.failedCount === importStore.totalCount) {
+      return importStore.failedCount > 0
+        ? `完成 ${importStore.completedCount}/${importStore.totalCount}，失败 ${importStore.failedCount}`
+        : `已完成 ${importStore.totalCount} 个文件`
+    }
+    return `已完成 ${importStore.completedCount}/${importStore.totalCount}`
+  }
+
   const running = importStore.currentStage
   if (running) return `正在${running.label}`
-  const ready = importStore.stages.find(item => item.status === 'ready')
-  if (ready) return '等待确认导入'
-  const done = importStore.stages.every(item => item.status === 'done' || item.status === 'idle')
-  if (done && importStore.processLogs.length) return '导入完成'
   return '等待处理'
 })
 
 const activeStageDetail = computed(() => {
   const running = importStore.currentStage
   if (running?.detail) return running.detail
-  const ready = importStore.stages.find(item => item.status === 'ready' && item.detail)
-  if (ready) return ready.detail
   const lastDone = [...importStore.stages].reverse().find(item => item.status === 'done' && item.detail)
   return lastDone?.detail || ''
+})
+
+const importSummary = computed(() => {
+  if (importStore.totalCount) {
+    return `本轮共 ${importStore.totalCount} 个文件`
+  }
+  return importStore.currentFileName || '等待文件'
 })
 
 watch(() => graphStore.currentGraphId, refreshFiles, { immediate: true })
@@ -211,6 +233,26 @@ function formatFileSize(size) {
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function getTaskProgress(item) {
+  const stages = item?.stages || []
+  if (!stages.length) return 0
+
+  let progress = 0
+  stages.forEach((stage, index) => {
+    if (stage.status === 'done') progress += 1
+    else if (stage.status === 'running') progress += 0.55
+    else if (stage.status === 'error') progress = Math.max(progress, index + 0.35)
+  })
+  return Math.min(100, Math.round((progress / stages.length) * 100))
+}
+
+function formatTaskState(item) {
+  if (item.status === 'done') return '完成'
+  if (item.status === 'error') return '失败'
+  if (item.status === 'running') return `${getTaskProgress(item)}%`
+  return '排队中'
 }
 </script>
 
@@ -325,65 +367,104 @@ function formatFileSize(size) {
   background: linear-gradient(90deg, #ef4444, #f97316);
 }
 
-.stage-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.stage-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
-  border-radius: 999px;
-  background: rgba(241, 245, 249, 0.9);
-  color: var(--color-text-secondary);
-  font-size: 11px;
-}
-
-.stage-pill-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: rgba(148, 163, 184, 0.6);
-}
-
-.stage-running {
-  background: rgba(79, 109, 245, 0.1);
-  color: var(--color-primary);
-}
-
-.stage-running .stage-pill-dot {
-  background: var(--color-primary);
-}
-
-.stage-done,
-.stage-ready {
-  background: rgba(22, 163, 74, 0.1);
-  color: #15803d;
-}
-
-.stage-done .stage-pill-dot,
-.stage-ready .stage-pill-dot {
-  background: #16a34a;
-}
-
-.stage-error {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--color-danger);
-}
-
-.stage-error .stage-pill-dot {
-  background: var(--color-danger);
-}
-
 .progress-detail {
   margin-top: 12px;
   font-size: 12px;
   color: var(--color-text-secondary);
   line-height: 1.7;
+}
+
+.task-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.task-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.95);
+  border: 1px solid var(--color-border-light);
+}
+
+.task-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-item-name {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-item-state,
+.task-item-meta,
+.task-item-error {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.task-item-error {
+  color: var(--color-danger);
+}
+
+.task-item-track {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.9);
+  overflow: hidden;
+}
+
+.task-item-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4f6df5, #2f9ef5);
+}
+
+.task-done .task-item-bar {
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+}
+
+.task-error .task-item-bar {
+  background: linear-gradient(90deg, #ef4444, #f97316);
+}
+
+.task-item-stages {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.task-stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.5);
+}
+
+.task-stage-running {
+  background: var(--color-primary);
+}
+
+.task-stage-done,
+.task-stage-ready {
+  background: #16a34a;
+}
+
+.task-stage-error {
+  background: var(--color-danger);
+}
+
+.task-item-meta,
+.task-item-error {
+  margin-top: 8px;
 }
 
 .summary-card {

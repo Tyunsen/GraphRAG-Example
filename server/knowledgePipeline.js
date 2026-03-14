@@ -85,6 +85,118 @@ export function normalizeLabel(value = '') {
     .replace(/\s+/g, ' ')
 }
 
+function normalizeAliasToken(value = '') {
+  let text = normalizeLabel(value)
+    .replace(/[()（）【】\[\]{}<>《》"'`“”‘’.,，。:：;；!?！？/\-_\s]+/g, '')
+
+  const removableSuffixes = [
+    '伊斯兰共和国',
+    '共和国',
+    '有限公司',
+    '股份有限公司',
+    '集团',
+    '公司',
+    '政府',
+    '当局',
+    '方面',
+    '武装力量',
+    '部队',
+    '组织',
+    '集团军',
+    '军方',
+    '方面',
+    'the',
+    'government',
+    'administration',
+    'agency',
+    'group',
+    'company',
+    'corp',
+    'inc',
+    'ltd'
+  ]
+
+  for (const suffix of removableSuffixes) {
+    if (text.length <= suffix.length + 2) continue
+    if (text.endsWith(suffix)) {
+      text = text.slice(0, -suffix.length)
+      break
+    }
+  }
+
+  return text || normalizeLabel(value)
+}
+
+function normalizeTimeToken(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/[年/月日号点时分秒\s]+/g, '')
+    .slice(0, 24)
+}
+
+function normalizeLocationToken(value = '') {
+  return normalizeAliasToken(value).slice(0, 32)
+}
+
+function normalizeActorKey(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^entity:/, '')
+}
+
+function canonicalizeEntityKey(label, nodeType, properties = {}) {
+  const candidates = [
+    label,
+    ...(Array.isArray(properties.aliases) ? properties.aliases : []),
+    properties.alias,
+    properties.normalizedName,
+    properties.name
+  ]
+  const normalizedCandidates = candidates
+    .map(item => normalizeAliasToken(item))
+    .filter(Boolean)
+
+  const best = normalizedCandidates.sort((a, b) => b.length - a.length)[0] || normalizeAliasToken(label)
+  return `${nodeType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${best}`
+}
+
+function canonicalizeEventKey({
+  label = '',
+  eventType = '',
+  trigger = '',
+  subjectKeys = [],
+  objectKeys = [],
+  timeText = '',
+  locationText = ''
+}) {
+  const normalizedType = normalizeAliasToken(eventType || '一般事件')
+  const normalizedTrigger = normalizeAliasToken(trigger || label)
+  const subjects = subjectKeys
+    .map(item => normalizeActorKey(item))
+    .filter(Boolean)
+    .sort()
+    .slice(0, 3)
+  const objects = objectKeys
+    .map(item => normalizeActorKey(item))
+    .filter(Boolean)
+    .sort()
+    .slice(0, 3)
+  const normalizedTime = normalizeTimeToken(timeText)
+  const normalizedLocation = normalizeLocationToken(locationText)
+
+  const parts = [
+    normalizedType || 'event',
+    normalizedTrigger || normalizeAliasToken(label),
+    subjects.join('+'),
+    objects.join('+'),
+    normalizedLocation,
+    normalizedTime
+  ].filter(Boolean)
+
+  return `event:${parts.join('|')}`
+}
+
 export function makeStableId(prefix, value) {
   const digest = createHash('md5').update(String(value || '')).digest('hex').slice(0, 16)
   return `${prefix}_${digest}`
@@ -349,7 +461,7 @@ export function buildKnowledgeRecords(
   const eventMentions = []
   const relationMentions = []
   const paragraphRefsByNode = new Map()
-  const canonicalKindByKey = new Map()
+  const nodeKeyByLabel = new Map()
   const fileNodes = []
   const fileEdges = []
 
@@ -361,9 +473,6 @@ export function buildKnowledgeRecords(
     const paragraphRefs = findParagraphRefs(paragraphs, label, [1])
     const chunkId = findSegmentIdForParagraphRefs(segments, paragraphRefs)
     paragraphRefsByNode.set(label, paragraphRefs)
-    const canonicalKey = `${nodeType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${normalizeLabel(label)}`
-    canonicalKindByKey.set(canonicalKey, nodeType === EVENT_NODE_TYPE ? 'event' : 'entity')
-
     if (nodeType === EVENT_NODE_TYPE) {
       const inbound = relationIndex.inbound.get(label) || []
       const outbound = relationIndex.outbound.get(label) || []
@@ -372,15 +481,15 @@ export function buildKnowledgeRecords(
       const subjectKeys = dedupe([
         ...inbound
           .filter(edge => edge.sourceType !== EVENT_NODE_TYPE && AGENT_RELATIONS.has(edge.label))
-          .map(edge => `entity:${normalizeLabel(edge.source)}`),
-        ...coerceStringArray(properties.subject).map(item => `entity:${normalizeLabel(item)}`)
+          .map(edge => `entity:${normalizeAliasToken(edge.source)}`),
+        ...coerceStringArray(properties.subject).map(item => `entity:${normalizeAliasToken(item)}`)
       ])
 
       const objectKeys = dedupe([
         ...outbound
           .filter(edge => edge.targetType !== EVENT_NODE_TYPE && OBJECT_RELATIONS.has(edge.label))
-          .map(edge => `entity:${normalizeLabel(edge.target)}`),
-        ...coerceStringArray(properties.object).map(item => `entity:${normalizeLabel(item)}`)
+          .map(edge => `entity:${normalizeAliasToken(edge.target)}`),
+        ...coerceStringArray(properties.object).map(item => `entity:${normalizeAliasToken(item)}`)
       ])
 
       const eventType = inferEventType(label, String(properties.eventType || '').trim())
@@ -402,6 +511,16 @@ export function buildKnowledgeRecords(
         ''
       ).trim()
       const summary = String(properties.summary || label).trim()
+      const canonicalKey = canonicalizeEventKey({
+        label,
+        eventType,
+        trigger,
+        subjectKeys,
+        objectKeys,
+        timeText,
+        locationText
+      })
+      nodeKeyByLabel.set(label, canonicalKey)
 
       eventMentions.push({
         id: makeStableId('em', `${fileId}|${canonicalKey}|${label}|${paragraphRefs.join(',')}`),
@@ -446,6 +565,8 @@ export function buildKnowledgeRecords(
     }
 
     const properties = isObject(node.properties) ? node.properties : {}
+    const canonicalKey = canonicalizeEntityKey(label, nodeType, properties)
+    nodeKeyByLabel.set(label, canonicalKey)
     entityMentions.push({
       id: makeStableId('en', `${fileId}|${canonicalKey}|${label}|${paragraphRefs.join(',')}`),
       graphId,
@@ -481,8 +602,10 @@ export function buildKnowledgeRecords(
 
     const sourceType = normalizeNodeType(nodeTypeMap.get(sourceLabel) || '')
     const targetType = normalizeNodeType(nodeTypeMap.get(targetLabel) || '')
-    const sourceKey = `${sourceType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${normalizeLabel(sourceLabel)}`
-    const targetKey = `${targetType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${normalizeLabel(targetLabel)}`
+    const sourceKey = nodeKeyByLabel.get(sourceLabel)
+      || `${sourceType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${normalizeLabel(sourceLabel)}`
+    const targetKey = nodeKeyByLabel.get(targetLabel)
+      || `${targetType === EVENT_NODE_TYPE ? 'event' : 'entity'}:${normalizeLabel(targetLabel)}`
     const paragraphRefs = uniqueIntegers([
       ...(paragraphRefsByNode.get(sourceLabel) || []),
       ...(paragraphRefsByNode.get(targetLabel) || [])
@@ -519,9 +642,6 @@ export function buildKnowledgeRecords(
       edgeProperties: JSON.stringify(properties),
       createdAt: now
     })
-
-    canonicalKindByKey.set(sourceKey, sourceType === EVENT_NODE_TYPE ? 'event' : 'entity')
-    canonicalKindByKey.set(targetKey, targetType === EVENT_NODE_TYPE ? 'event' : 'entity')
   }
 
   const paragraphRows = buildParagraphRows(

@@ -42,6 +42,22 @@ export const useImportStore = defineStore('import', () => {
     stages.value.find(item => item.status === 'running') || null
   )
 
+  const jobItems = computed(() => jobSnapshot.value?.items || [])
+  const completedCount = computed(() => Number(jobSnapshot.value?.completedFiles || 0))
+  const failedCount = computed(() => Number(jobSnapshot.value?.failedFiles || 0))
+  const totalCount = computed(() => Number(jobSnapshot.value?.totalFiles || 0))
+  const overallProgress = computed(() => {
+    if (!totalCount.value) return 0
+    let units = completedCount.value + failedCount.value
+    for (const item of jobItems.value) {
+      if (item.status !== 'running') continue
+      const stageTotal = item.stages?.length || 1
+      const stageDone = (item.stages || []).filter(stage => stage.status === 'done').length
+      units += stageDone / stageTotal
+    }
+    return Math.min(100, Math.round((units / totalCount.value) * 100))
+  })
+
   const hasActivity = computed(() =>
     Boolean(activeJobId.value || currentFileName.value || parseError.value || processLogs.value.length)
   )
@@ -236,6 +252,11 @@ export const useImportStore = defineStore('import', () => {
     lastResult,
     currentFileName,
     currentStage,
+    jobItems,
+    completedCount,
+    failedCount,
+    totalCount,
+    overallProgress,
     stages,
     processLogs,
     extractionSummary,

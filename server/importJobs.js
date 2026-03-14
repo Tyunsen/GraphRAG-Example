@@ -128,6 +128,15 @@ async function extractGraphForItem(job, item) {
       temperature: job.options.temperature,
       maxTokens: job.options.maxTokens
     })
+    const nodeCount = Array.isArray(graph?.nodes) ? graph.nodes.length : 0
+    const edgeCount = Array.isArray(graph?.edges) ? graph.edges.length : 0
+    if (nodeCount === 0 && edgeCount === 0) {
+      appendLog(item, '模型返回空图，回退到保守规则')
+      return {
+        graph: extractFallbackGraph(item.content),
+        method: 'fallback-rule'
+      }
+    }
     return { graph, method: 'server-llm' }
   } catch (error) {
     appendLog(item, `模型抽取失败，回退到保守规则：${error.message}`)
