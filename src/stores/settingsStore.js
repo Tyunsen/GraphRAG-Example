@@ -3,6 +3,17 @@ import { ref, watch, computed } from 'vue'
 import { getDefaultPrompt } from '@/services/llmExtractor'
 
 const STORAGE_KEY = 'zstp-settings'
+const DEFAULTS = {
+  apiEndpoint: '/api/llm',
+  apiKey: '',
+  modelName: 'MiniMax-M2.5',
+  temperature: 0.7,
+  maxTokens: 1024,
+  bfsDepth: 2,
+  bfsMaxNodes: 50,
+  useLLMExtraction: true,
+  extractionPrompt: getDefaultPrompt()
+}
 
 function loadFromStorage() {
   try {
@@ -16,17 +27,16 @@ function loadFromStorage() {
 export const useSettingsStore = defineStore('settings', () => {
   const saved = loadFromStorage()
 
-  const apiEndpoint = ref(saved?.apiEndpoint || '')
-  const apiKey = ref(saved?.apiKey || '')
-  const modelName = ref(saved?.modelName || '')
-  const temperature = ref(saved?.temperature ?? 0.7)
-  const maxTokens = ref(saved?.maxTokens ?? 1024)
-  const bfsDepth = ref(saved?.bfsDepth ?? 2)
-  const bfsMaxNodes = ref(saved?.bfsMaxNodes ?? 50)
+  const apiEndpoint = ref(saved?.apiEndpoint || DEFAULTS.apiEndpoint)
+  const apiKey = ref(saved?.apiKey || DEFAULTS.apiKey)
+  const modelName = ref(saved?.modelName || DEFAULTS.modelName)
+  const temperature = ref(saved?.temperature ?? DEFAULTS.temperature)
+  const maxTokens = ref(saved?.maxTokens ?? DEFAULTS.maxTokens)
+  const bfsDepth = ref(saved?.bfsDepth ?? DEFAULTS.bfsDepth)
+  const bfsMaxNodes = ref(saved?.bfsMaxNodes ?? DEFAULTS.bfsMaxNodes)
 
-  // LLM extraction settings
-  const useLLMExtraction = ref(saved?.useLLMExtraction ?? true)
-  const extractionPrompt = ref(saved?.extractionPrompt || getDefaultPrompt())
+  const useLLMExtraction = ref(saved?.useLLMExtraction ?? DEFAULTS.useLLMExtraction)
+  const extractionPrompt = ref(saved?.extractionPrompt || DEFAULTS.extractionPrompt)
 
   const isApiConfigured = computed(() => !!apiEndpoint.value)
 
@@ -51,15 +61,15 @@ export const useSettingsStore = defineStore('settings', () => {
   )
 
   function resetDefaults() {
-    apiEndpoint.value = ''
-    apiKey.value = ''
-    modelName.value = ''
-    temperature.value = 0.7
-    maxTokens.value = 1024
-    bfsDepth.value = 2
-    bfsMaxNodes.value = 50
-    useLLMExtraction.value = true
-    extractionPrompt.value = getDefaultPrompt()
+    apiEndpoint.value = DEFAULTS.apiEndpoint
+    apiKey.value = DEFAULTS.apiKey
+    modelName.value = DEFAULTS.modelName
+    temperature.value = DEFAULTS.temperature
+    maxTokens.value = DEFAULTS.maxTokens
+    bfsDepth.value = DEFAULTS.bfsDepth
+    bfsMaxNodes.value = DEFAULTS.bfsMaxNodes
+    useLLMExtraction.value = DEFAULTS.useLLMExtraction
+    extractionPrompt.value = DEFAULTS.extractionPrompt
   }
 
   function resetExtractionPrompt() {

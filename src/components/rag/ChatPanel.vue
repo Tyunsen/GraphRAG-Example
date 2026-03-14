@@ -1,42 +1,60 @@
 <template>
   <div class="chat-panel">
+    <div class="session-toolbar">
+      <div class="session-title">会话</div>
+      <button class="btn btn-sm btn-primary" @click="ragStore.createSession()">新建</button>
+    </div>
+
+    <div class="session-list" v-if="ragStore.sessions.length > 0">
+      <button
+        v-for="session in ragStore.sessions"
+        :key="session.id"
+        class="session-chip"
+        :class="{ active: ragStore.currentSessionId === session.id }"
+        @click="ragStore.switchSession(session.id)"
+      >
+        {{ session.title }}
+      </button>
+    </div>
+
     <div class="chat-messages" ref="messagesRef">
       <div v-if="ragStore.messages.length === 0" class="chat-empty">
-        <p>基于知识图谱的智能问答</p>
-        <p class="text-muted">输入问题，系统将从图谱中检索相关上下文</p>
+        <p>围绕当前工作区做证据优先问答</p>
+        <p class="text-muted">进入会话默认展示完整图谱，点击某条问题后聚焦它对应的证据子图。</p>
       </div>
       <ChatMessage
         v-for="msg in ragStore.messages"
         :key="msg.id"
         :msg="msg"
+        :active="ragStore.activeMessageId === msg.id"
+        @select="ragStore.selectMessage"
       />
       <div v-if="ragStore.isLoading" class="chat-loading">
-        <span class="loading-dots">思考中...</span>
+        <span class="loading-dots">检索与生成中...</span>
       </div>
     </div>
+
     <div class="chat-input-area">
       <input
         class="input chat-input"
         v-model="inputText"
         placeholder="输入问题..."
         @keydown.enter="sendMessage"
-        :disabled="ragStore.isLoading"
+        :disabled="ragStore.isLoading || !graphStore.currentGraphId"
       />
-      <button
-        class="btn btn-primary"
-        @click="sendMessage"
-        :disabled="!inputText.trim() || ragStore.isLoading"
-      >发送</button>
+      <button class="btn btn-primary" @click="sendMessage" :disabled="!inputText.trim() || ragStore.isLoading">发送</button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
+import { useGraphStore } from '@/stores/graphStore'
 import { useRagStore } from '@/stores/ragStore'
 import { useRagQuery } from '@/composables/useRagQuery'
 import ChatMessage from './ChatMessage.vue'
 
+const graphStore = useGraphStore()
 const ragStore = useRagStore()
 const { askQuestion } = useRagQuery()
 
@@ -52,9 +70,7 @@ async function sendMessage() {
 
 watch(() => ragStore.messages.length, () => {
   nextTick(() => {
-    if (messagesRef.value) {
-      messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-    }
+    if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
   })
 })
 </script>
@@ -64,6 +80,35 @@ watch(() => ragStore.messages.length, () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+.session-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.session-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+.session-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.session-chip {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.session-chip.active {
+  background: rgba(79, 109, 245, 0.1);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 .chat-messages {
   flex: 1;
@@ -76,7 +121,7 @@ watch(() => ragStore.messages.length, () => {
   color: var(--color-text-muted);
   font-size: 13px;
 }
-.chat-empty .text-muted {
+.text-muted {
   font-size: 12px;
   margin-top: 4px;
 }

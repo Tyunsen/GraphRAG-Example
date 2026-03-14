@@ -56,7 +56,9 @@ onMounted(() => {
   }
 
   resizeObserver = new ResizeObserver(() => {
-    // Dimensions are recalculated on next update()
+    nextTick(() => {
+      forceGraph.update()
+    })
   })
   resizeObserver.observe(containerRef.value)
 })

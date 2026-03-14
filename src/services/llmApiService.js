@@ -4,16 +4,15 @@
 
 function resolveEndpoint(apiEndpoint) {
   let url = apiEndpoint.trim().replace(/\/+$/, '')
-  if (!url.endsWith('/chat/completions')) {
-    if (!url.endsWith('/v1')) {
-      url += '/v1'
-    }
-    url += '/chat/completions'
+  if (!url) return url
+  if (url.endsWith('/chat/completions')) return url
+  if (url.startsWith('/api/llm')) return `${url}/chat/completions`
+  if (!url.endsWith('/v1')) {
+    url += '/v1'
   }
-  return url
+  return `${url}/chat/completions`
 }
 
-/** Infer default model name from the API endpoint URL */
 function inferModel(apiEndpoint) {
   const host = apiEndpoint.toLowerCase()
   if (host.includes('deepseek')) return 'deepseek-chat'
@@ -21,15 +20,28 @@ function inferModel(apiEndpoint) {
   if (host.includes('dashscope') || host.includes('aliyun')) return 'qwen-turbo'
   if (host.includes('zhipuai') || host.includes('bigmodel')) return 'glm-4-flash'
   if (host.includes('baichuan')) return 'Baichuan2-Turbo'
-  if (host.includes('minimax')) return 'abab5.5-chat'
+  if (host.includes('minimax')) return 'MiniMax-M2.5'
+  if (host.startsWith('/api/llm')) return 'MiniMax-M2.5'
   if (host.includes('openai')) return 'gpt-3.5-turbo'
   return 'gpt-3.5-turbo'
+}
+
+function stripReasoning(text) {
+  return String(text || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .trim()
+}
+
+export function sanitizeRAGAnswer(text) {
+  return String(text || '')
+    .replace(/\n{1,}(?:\*\*)?\s*证据来源\s*(?:：|:)?(?:\*\*)?[\s\S]*$/u, '')
+    .trim()
 }
 
 export async function callLLM(settings, messages) {
   const { apiEndpoint, apiKey, modelName, temperature, maxTokens } = settings
 
-  if (!apiEndpoint) throw new Error('API 端点未配置，请在 API 标签页中设置')
+  if (!apiEndpoint) throw new Error('API 端点未配置，请先在 API 设置中填写地址')
 
   const url = resolveEndpoint(apiEndpoint)
   const model = modelName || inferModel(apiEndpoint)
@@ -38,11 +50,11 @@ export async function callLLM(settings, messages) {
     'Content-Type': 'application/json'
   }
   if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`
+    headers.Authorization = `Bearer ${apiKey}`
   }
 
   const body = {
-    model: model,
+    model,
     messages,
     temperature: temperature ?? 0.7,
     max_tokens: maxTokens ?? 1024,
@@ -56,14 +68,14 @@ export async function callLLM(settings, messages) {
       headers,
       body: JSON.stringify(body)
     })
-  } catch (e) {
-    throw new Error(`无法连接到 API (${url}): ${e.message}`)
+  } catch (error) {
+    throw new Error(`无法连接到 API (${url}): ${error.message}`)
   }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => '')
     if (response.status === 401) {
-      throw new Error('API Key 无效或未设置 (401 Unauthorized)')
+      throw new Error('API Key 无效或未配置 (401 Unauthorized)')
     }
     if (response.status === 404) {
       throw new Error(`API 端点不存在 (404)，请检查地址是否正确。当前请求: ${url}`)
@@ -73,32 +85,26 @@ export async function callLLM(settings, messages) {
 
   const data = await response.json()
   if (data.choices && data.choices.length > 0) {
-    return data.choices[0].message?.content || ''
+    return stripReasoning(data.choices[0].message?.content || '')
   }
 
-  // Some APIs return result in different formats
-  if (data.response) return data.response
-  if (data.result) return data.result
-  if (data.output?.text) return data.output.text
+  if (data.response) return stripReasoning(data.response)
+  if (data.result) return stripReasoning(data.result)
+  if (data.output?.text) return stripReasoning(data.output.text)
 
   throw new Error('API 返回格式异常: 未找到有效回复内容')
 }
 
-/**
- * Build messages array for RAG query
- */
 export function buildRAGMessages(contextText, userQuery) {
   return [
     {
       role: 'system',
-      content: `你是一个智能文档问答助手。请根据提供的参考资料回答用户的问题。
-
+      content: `你是一个证据优先的工作区问答助手。请根据提供的证据段落做精简回答。
 回答规则：
-1. 以"原始文档内容"为核心依据，优先引用文档中的原文进行回答
-2. "知识图谱结构"仅作为辅助参考，帮助理解实体之间的关系
-3. 回答应准确、详细，尽量基于文档原文，可以适当引用关键语句
-4. 如果文档中没有相关信息，请诚实说明
-
+1. 直接回答用户问题，控制在 1 到 3 句话。
+2. 不要在回答里重复列“证据来源”、文档名、第几段、涉及实体或涉及事件。
+3. 只依据给出的证据段落和图谱辅助线索回答，不要编造。
+4. 如果证据不足，直接说明“现有证据不足以回答”。
 ${contextText}`
     },
     {

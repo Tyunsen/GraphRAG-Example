@@ -8,9 +8,7 @@
       <div class="history-item" v-for="item in reversedHistory" :key="item.id">
         <div class="history-info">
           <span class="history-name">{{ item.fileName }}</span>
-          <span class="history-meta">
-            {{ item.nodesAdded }} 节点, {{ item.edgesAdded }} 关系
-          </span>
+          <span class="history-meta">{{ item.nodesAdded }} 节点，{{ item.edgesAdded }} 关系</span>
           <span class="history-time">{{ formatTime(item.timestamp) }}</span>
         </div>
         <button class="btn btn-sm btn-secondary" @click="graphStore.removeImport(item.id)">删除</button>
@@ -24,7 +22,6 @@ import { computed } from 'vue'
 import { useGraphStore } from '@/stores/graphStore'
 
 const graphStore = useGraphStore()
-
 const reversedHistory = computed(() => [...graphStore.importHistory].reverse())
 
 function formatTime(ts) {

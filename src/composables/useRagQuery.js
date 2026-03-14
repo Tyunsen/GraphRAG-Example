@@ -3,7 +3,7 @@ import { useGraphStore } from '@/stores/graphStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useRagStore } from '@/stores/ragStore'
 import { retrieveContext } from '@/services/ragRetriever'
-import { callLLM, buildRAGMessages } from '@/services/llmApiService'
+import { callLLM, buildRAGMessages, sanitizeRAGAnswer } from '@/services/llmApiService'
 
 export function useRagQuery() {
   const graphStore = useGraphStore()
@@ -31,9 +31,12 @@ export function useRagQuery() {
 
       // Build messages and call LLM
       const messages = buildRAGMessages(context.text, query)
-      const answer = await callLLM(settings, messages)
+      const answer = sanitizeRAGAnswer(await callLLM(settings, messages))
 
-      ragStore.addMessage('assistant', answer, context)
+      const assistantMessage = await ragStore.addMessage('assistant', answer, context)
+      if (assistantMessage?.id) {
+        ragStore.selectMessage(assistantMessage.id)
+      }
     } catch (e) {
       ragStore.addMessage('assistant', `查询失败: ${e.message}`)
     } finally {

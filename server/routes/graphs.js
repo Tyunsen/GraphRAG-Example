@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { getDB, saveToDisk } from '../db.js'
+import { deleteWorkspaceGraph, queryWorkspaceSubgraph, syncWorkspaceGraph } from '../graphdb.js'
 
 const router = Router()
 
@@ -25,31 +26,95 @@ function run(sql, params = []) {
   db.run(sql, params)
 }
 
-// ── List all graphs ─────────────────────────────────────────
+function parseJson(value, fallback) {
+  try {
+    return value ? JSON.parse(value) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+async function rebuildGraphDb(graphId) {
+  const workspace = getRow('SELECT * FROM graphs WHERE id = ?', [graphId])
+  if (!workspace) return
+  const nodes = allRows('SELECT * FROM nodes WHERE graphId = ?', [graphId]).map(n => ({
+    ...n,
+    properties: parseJson(n.properties, {})
+  }))
+  const edges = allRows('SELECT * FROM edges WHERE graphId = ?', [graphId]).map(e => ({
+    ...e,
+    properties: parseJson(e.properties, {})
+  }))
+  await syncWorkspaceGraph(workspace, nodes, edges)
+}
+
 router.get('/', (req, res) => {
   try {
-    const graphs = allRows('SELECT * FROM graphs ORDER BY updatedAt DESC')
+    const graphs = allRows(`
+      SELECT
+        g.*,
+        (SELECT COUNT(*) FROM files f WHERE f.graphId = g.id) as fileCount,
+        (SELECT COUNT(*) FROM sessions s WHERE s.graphId = g.id) as sessionCount
+      FROM graphs g
+      ORDER BY g.updatedAt DESC
+    `)
     res.json(graphs)
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-// ── Get full graph data (nodes + edges + importHistory) ─────
+router.post('/', (req, res) => {
+  try {
+    const now = Date.now()
+    const {
+      id,
+      name = '未命名工作区',
+      intentQuery = '',
+      intentSummary = ''
+    } = req.body || {}
+
+    if (!id) return res.status(400).json({ error: 'id is required' })
+    if (!intentQuery.trim()) return res.status(400).json({ error: 'intentQuery is required' })
+
+    run(
+      `
+      INSERT INTO graphs (id, name, intentQuery, intentSummary, nodeCount, edgeCount, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, 0, 0, ?, ?)
+      `,
+      [id, name.trim(), intentQuery.trim(), intentSummary.trim(), now, now]
+    )
+
+    const sessionId = `s_${Math.random().toString(36).slice(2, 10)}`
+    run(
+      'INSERT INTO sessions (id, graphId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)',
+      [sessionId, id, '默认会话', now, now]
+    )
+
+    saveToDisk()
+    res.json({ success: true, id, defaultSessionId: sessionId })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 router.get('/:id', (req, res) => {
   try {
     const graph = getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id])
-    if (!graph) return res.status(404).json({ error: 'Graph not found' })
+    if (!graph) return res.status(404).json({ error: 'Workspace not found' })
 
     const nodes = allRows('SELECT * FROM nodes WHERE graphId = ?', [req.params.id]).map(n => ({
       ...n,
-      properties: JSON.parse(n.properties || '{}')
+      properties: parseJson(n.properties, {})
     }))
     const edges = allRows('SELECT * FROM edges WHERE graphId = ?', [req.params.id]).map(e => ({
       ...e,
-      properties: JSON.parse(e.properties || '{}')
+      properties: parseJson(e.properties, {})
     }))
-    const importHistory = allRows('SELECT * FROM import_history WHERE graphId = ? ORDER BY timestamp DESC', [req.params.id])
+    const importHistory = allRows(
+      'SELECT * FROM import_history WHERE graphId = ? ORDER BY timestamp DESC',
+      [req.params.id]
+    )
 
     res.json({ ...graph, nodes, edges, importHistory })
   } catch (e) {
@@ -57,10 +122,42 @@ router.get('/:id', (req, res) => {
   }
 })
 
-// ── Save full graph (upsert graph + replace all nodes/edges) ─
-router.put('/:id', (req, res) => {
+router.post('/:id/context', async (req, res) => {
+  try {
+    const graph = getRow('SELECT id FROM graphs WHERE id = ?', [req.params.id])
+    if (!graph) return res.status(404).json({ error: 'Workspace not found' })
+
+    const {
+      labels = [],
+      maxDepth = 2,
+      maxNodes = 80,
+      maxSeeds = 12,
+      pathLimit = 200
+    } = req.body || {}
+
+    const result = await queryWorkspaceSubgraph(req.params.id, labels, {
+      maxDepth,
+      maxNodes,
+      maxSeeds,
+      pathLimit
+    })
+
+    res.json(result)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+router.put('/:id', async (req, res) => {
   const { id } = req.params
-  const { name, nodes = [], edges = [], importHistory = [] } = req.body
+  const {
+    name,
+    intentQuery = '',
+    intentSummary = '',
+    nodes = [],
+    edges = [],
+    importHistory = []
+  } = req.body || {}
 
   try {
     const now = Date.now()
@@ -70,100 +167,162 @@ router.put('/:id', (req, res) => {
       run('DELETE FROM nodes WHERE graphId = ?', [id])
       run('DELETE FROM edges WHERE graphId = ?', [id])
       run('DELETE FROM import_history WHERE graphId = ?', [id])
-      run('UPDATE graphs SET name = ?, nodeCount = ?, edgeCount = ?, updatedAt = ? WHERE id = ?',
-        [name || existing.name, nodes.length, edges.length, now, id])
+      run(
+        `
+        UPDATE graphs
+        SET name = ?, intentQuery = ?, intentSummary = ?, nodeCount = ?, edgeCount = ?, updatedAt = ?
+        WHERE id = ?
+        `,
+        [
+          name || existing.name,
+          intentQuery || existing.intentQuery || '',
+          intentSummary || existing.intentSummary || '',
+          nodes.length,
+          edges.length,
+          now,
+          id
+        ]
+      )
     } else {
-      run('INSERT INTO graphs (id, name, nodeCount, edgeCount, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)',
-        [id, name || '图谱', nodes.length, edges.length, now, now])
+      run(
+        `
+        INSERT INTO graphs (id, name, intentQuery, intentSummary, nodeCount, edgeCount, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [id, name || '未命名工作区', intentQuery, intentSummary, nodes.length, edges.length, now, now]
+      )
     }
 
     for (const n of nodes) {
-      run('INSERT OR REPLACE INTO nodes (id, graphId, label, type, properties, sourceFile, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [n.id, id, n.label, n.type || 'default', JSON.stringify(n.properties || {}), n.sourceFile || '', n.createdAt || now])
+      run(
+        `
+        INSERT OR REPLACE INTO nodes (id, graphId, label, type, properties, sourceFile, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+        [n.id, id, n.label, n.type || 'default', JSON.stringify(n.properties || {}), n.sourceFile || '', n.createdAt || now]
+      )
     }
+
     for (const e of edges) {
-      run('INSERT OR REPLACE INTO edges (id, graphId, source, target, label, weight, properties, sourceFile, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [e.id, id, e.source, e.target, e.label || '', e.weight || 1, JSON.stringify(e.properties || {}), e.sourceFile || '', e.createdAt || now])
+      run(
+        `
+        INSERT OR REPLACE INTO edges (id, graphId, source, target, label, weight, properties, sourceFile, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          e.id,
+          id,
+          e.source,
+          e.target,
+          e.label || '',
+          e.weight || 1,
+          JSON.stringify(e.properties || {}),
+          e.sourceFile || '',
+          e.createdAt || now
+        ]
+      )
     }
+
     for (const h of importHistory) {
-      run('INSERT OR REPLACE INTO import_history (id, graphId, fileName, timestamp, nodesAdded, edgesAdded) VALUES (?, ?, ?, ?, ?, ?)',
-        [h.id, id, h.fileName, h.timestamp || now, h.nodesAdded || 0, h.edgesAdded || 0])
+      run(
+        `
+        INSERT OR REPLACE INTO import_history (id, graphId, fileName, timestamp, nodesAdded, edgesAdded)
+        VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        [h.id, id, h.fileName, h.timestamp || now, h.nodesAdded || 0, h.edgesAdded || 0]
+      )
     }
 
     saveToDisk()
+    await rebuildGraphDb(id)
     res.json({ success: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-// ── Rename graph ────────────────────────────────────────────
-router.patch('/:id', (req, res) => {
+router.patch('/:id', async (req, res) => {
   try {
-    const { name } = req.body
-    if (!name) return res.status(400).json({ error: 'name is required' })
-    run('UPDATE graphs SET name = ?, updatedAt = ? WHERE id = ?', [name, Date.now(), req.params.id])
+    const existing = getRow('SELECT * FROM graphs WHERE id = ?', [req.params.id])
+    if (!existing) return res.status(404).json({ error: 'Workspace not found' })
+
+    const {
+      name = existing.name,
+      intentQuery = existing.intentQuery || '',
+      intentSummary = existing.intentSummary || ''
+    } = req.body || {}
+
+    run(
+      'UPDATE graphs SET name = ?, intentQuery = ?, intentSummary = ?, updatedAt = ? WHERE id = ?',
+      [name, intentQuery, intentSummary, Date.now(), req.params.id]
+    )
     saveToDisk()
+    await rebuildGraphDb(req.params.id)
     res.json({ success: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-// ── Delete graph (cascade manually) ─────────────────────────
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const id = req.params.id
     run('DELETE FROM nodes WHERE graphId = ?', [id])
     run('DELETE FROM edges WHERE graphId = ?', [id])
     run('DELETE FROM import_history WHERE graphId = ?', [id])
     run('DELETE FROM messages WHERE graphId = ?', [id])
+    run('DELETE FROM sessions WHERE graphId = ?', [id])
+    run('DELETE FROM file_chunks WHERE graphId = ?', [id])
     run('DELETE FROM files WHERE graphId = ?', [id])
     run('DELETE FROM graphs WHERE id = ?', [id])
     saveToDisk()
+    await deleteWorkspaceGraph(id)
     res.json({ success: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-// ── Remove import by importId ───────────────────────────────
-router.delete('/:id/imports/:importId', (req, res) => {
+router.delete('/:id/imports/:importId', async (req, res) => {
   const { id, importId } = req.params
 
   try {
     const record = getRow('SELECT * FROM import_history WHERE id = ? AND graphId = ?', [importId, id])
     if (!record) return res.status(404).json({ error: 'Import not found' })
 
-    // Delete edges from this file
     run('DELETE FROM edges WHERE graphId = ? AND sourceFile = ?', [id, record.fileName])
 
-    // Get remaining edge sources/targets to check which nodes are still connected
     const remainingEdges = allRows('SELECT source, target FROM edges WHERE graphId = ?', [id])
     const connectedNodes = new Set()
-    for (const e of remainingEdges) {
-      connectedNodes.add(e.source)
-      connectedNodes.add(e.target)
+    for (const edge of remainingEdges) {
+      connectedNodes.add(edge.source)
+      connectedNodes.add(edge.target)
     }
 
-    // Delete orphaned nodes from this file
     const fileNodes = allRows('SELECT id FROM nodes WHERE graphId = ? AND sourceFile = ?', [id, record.fileName])
-    for (const n of fileNodes) {
-      if (!connectedNodes.has(n.id)) {
-        run('DELETE FROM nodes WHERE id = ? AND graphId = ?', [n.id, id])
+    for (const node of fileNodes) {
+      if (!connectedNodes.has(node.id)) {
+        run('DELETE FROM nodes WHERE id = ? AND graphId = ?', [node.id, id])
       }
     }
 
-    // Delete the import record
+    const file = getRow('SELECT id FROM files WHERE graphId = ? AND fileName = ?', [id, record.fileName])
+    if (file?.id) {
+      run('DELETE FROM file_chunks WHERE fileId = ?', [file.id])
+      run('DELETE FROM files WHERE id = ?', [file.id])
+    }
+
     run('DELETE FROM import_history WHERE id = ? AND graphId = ?', [importId, id])
 
-    // Update counts
     const nc = getRow('SELECT COUNT(*) as count FROM nodes WHERE graphId = ?', [id])
     const ec = getRow('SELECT COUNT(*) as count FROM edges WHERE graphId = ?', [id])
-    run('UPDATE graphs SET nodeCount = ?, edgeCount = ?, updatedAt = ? WHERE id = ?',
-      [nc.count, ec.count, Date.now(), id])
+    run(
+      'UPDATE graphs SET nodeCount = ?, edgeCount = ?, updatedAt = ? WHERE id = ?',
+      [nc.count, ec.count, Date.now(), id]
+    )
 
     saveToDisk()
+    await rebuildGraphDb(id)
     res.json({ success: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

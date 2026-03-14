@@ -39,6 +39,10 @@ export function useFileParser() {
     lastResult.value = null
 
     try {
+      if (!graphStore.currentGraphId || !graphStore.currentIntentQuery) {
+        throw new Error('请先创建工作区，并填写该工作区的总意图后再导入文档。')
+      }
+
       const ext = getExt(file.name)
       let result
       let fileTextContent = null // plain text for saving to backend
@@ -64,7 +68,10 @@ export function useFileParser() {
 
         extracting.value = true
         try {
-          result = await extractWithLLM(plainText, settings)
+          result = await extractWithLLM(plainText, settings, {
+            workspaceIntent: graphStore.currentIntentQuery,
+            fileName: file.name
+          })
         } catch (llmErr) {
           // LLM failed → fall back to regex extraction
           console.warn('LLM extraction failed, falling back to regex:', llmErr.message)
@@ -170,7 +177,8 @@ export function useFileParser() {
           fileName: lastResult.value.fileName,
           content: lastResult.value.fileTextContent,
           fileType: lastResult.value.fileType,
-          fileSize: lastResult.value.fileSize
+          fileSize: lastResult.value.fileSize,
+          nodes: lastResult.value.nodes
         })
       } catch (e) {
         console.warn('[useFileParser] Failed to save file content to backend:', e.message)

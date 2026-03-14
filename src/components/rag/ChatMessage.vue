@@ -1,5 +1,5 @@
 <template>
-  <div class="chat-message" :class="msg.role">
+  <div class="chat-message" :class="[msg.role, { active }]" @click="$emit('select', msg.id)">
     <div class="msg-bubble">
       <div class="msg-content">{{ msg.content }}</div>
       <ContextViewer v-if="msg.context" :context="msg.context" />
@@ -12,8 +12,11 @@
 import ContextViewer from './ContextViewer.vue'
 
 defineProps({
-  msg: { type: Object, required: true }
+  msg: { type: Object, required: true },
+  active: { type: Boolean, default: false }
 })
+
+defineEmits(['select'])
 
 function formatTime(ts) {
   const d = new Date(ts)
@@ -26,6 +29,7 @@ function formatTime(ts) {
   display: flex;
   flex-direction: column;
   margin-bottom: 12px;
+  cursor: pointer;
 }
 .chat-message.user {
   align-items: flex-end;
@@ -40,6 +44,7 @@ function formatTime(ts) {
   font-size: 13px;
   line-height: 1.6;
   word-break: break-word;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 .user .msg-bubble {
   background: var(--color-primary);
@@ -50,6 +55,16 @@ function formatTime(ts) {
   background: var(--color-bg-card);
   border: 1px solid var(--color-border);
   border-bottom-left-radius: var(--radius-sm);
+}
+.chat-message.active .msg-bubble {
+  box-shadow: 0 0 0 2px rgba(79, 109, 245, 0.18);
+  transform: translateY(-1px);
+}
+.assistant.active .msg-bubble {
+  border-color: rgba(79, 109, 245, 0.35);
+}
+.user.active .msg-bubble {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.28);
 }
 .msg-time {
   font-size: 10px;

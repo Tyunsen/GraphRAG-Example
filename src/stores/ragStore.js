@@ -1,18 +1,180 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useGraphStore } from './graphStore'
-import { fetchMessages, postMessage, clearMessagesApi } from '@/services/apiClient'
+import {
+  clearMessagesApi,
+  createSessionApi,
+  deleteSessionApi,
+  fetchMessages,
+  fetchSessions,
+  postMessage,
+  renameSessionApi
+} from '@/services/apiClient'
+import { generateId } from '@/utils/idGenerator'
+
+const SESSION_STORAGE_KEY = 'zstp-current-session'
+
+function loadStoredSessions() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function persistStoredSession(workspaceId, sessionId) {
+  const map = loadStoredSessions()
+  if (workspaceId && sessionId) map[workspaceId] = sessionId
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(map))
+}
 
 export const useRagStore = defineStore('rag', () => {
   const graphStore = useGraphStore()
 
+  const sessions = ref([])
+  const currentSessionId = ref(null)
   const messages = ref([])
   const isLoading = ref(false)
   const lastContext = ref(null)
+  const activeMessageId = ref(null)
+
+  const currentSession = computed(() =>
+    sessions.value.find(item => item.id === currentSessionId.value) || null
+  )
+
+  function resetGraphView() {
+    activeMessageId.value = null
+    graphStore.showFullGraph()
+    graphStore.clearHighlights()
+  }
+
+  async function loadMessagesForSession(sessionId) {
+    if (!sessionId) {
+      messages.value = []
+      lastContext.value = null
+      resetGraphView()
+      return
+    }
+    try {
+      messages.value = await fetchMessages(sessionId)
+    } catch (error) {
+      console.warn('[ragStore] failed to load messages:', error.message)
+      messages.value = []
+    }
+    lastContext.value = null
+    resetGraphView()
+  }
+
+  function resolveContextForMessage(messageId) {
+    const index = messages.value.findIndex(item => item.id === messageId)
+    if (index === -1) return null
+
+    const current = messages.value[index]
+    if (current?.context) return current.context
+
+    if (current?.role === 'user') {
+      return messages.value
+        .slice(index + 1)
+        .find(item => item.role === 'assistant' && item.context)?.context || null
+    }
+
+    return null
+  }
+
+  function selectMessage(messageId) {
+    activeMessageId.value = messageId
+    const context = resolveContextForMessage(messageId)
+
+    if (!context?.subgraph?.nodes?.length) {
+      graphStore.showFullGraph()
+      graphStore.clearHighlights()
+      return
+    }
+
+    graphStore.focusSubgraph(context.subgraph)
+    graphStore.setHighlightedNodes(
+      context.nodeIds?.length
+        ? context.nodeIds
+        : context.subgraph.nodes.map(node => node.id)
+    )
+  }
+
+  async function ensureDefaultSession(graphId) {
+    if (!graphId) {
+      sessions.value = []
+      currentSessionId.value = null
+      messages.value = []
+      resetGraphView()
+      return
+    }
+
+    try {
+      sessions.value = await fetchSessions(graphId)
+      if (sessions.value.length === 0) {
+        const id = generateId('s')
+        await createSessionApi(graphId, { id, title: '默认会话' })
+        sessions.value = await fetchSessions(graphId)
+      }
+      const stored = loadStoredSessions()[graphId]
+      currentSessionId.value = sessions.value.some(item => item.id === stored)
+        ? stored
+        : sessions.value[0]?.id || null
+      if (currentSessionId.value) persistStoredSession(graphId, currentSessionId.value)
+      await loadMessagesForSession(currentSessionId.value)
+    } catch (error) {
+      console.warn('[ragStore] failed to load sessions:', error.message)
+      sessions.value = []
+      currentSessionId.value = null
+      messages.value = []
+      resetGraphView()
+    }
+  }
+
+  async function createSession(title = '新会话') {
+    const graphId = graphStore.currentGraphId
+    if (!graphId) return
+    const id = generateId('s')
+    await createSessionApi(graphId, { id, title })
+    sessions.value = await fetchSessions(graphId)
+    currentSessionId.value = id
+    persistStoredSession(graphId, id)
+    messages.value = []
+    lastContext.value = null
+    resetGraphView()
+  }
+
+  async function switchSession(sessionId) {
+    if (!sessionId || currentSessionId.value === sessionId) return
+    currentSessionId.value = sessionId
+    persistStoredSession(graphStore.currentGraphId, sessionId)
+    await loadMessagesForSession(sessionId)
+  }
+
+  async function renameSession(sessionId, title) {
+    if (!title.trim()) return
+    await renameSessionApi(sessionId, title.trim())
+    const target = sessions.value.find(item => item.id === sessionId)
+    if (target) target.title = title.trim()
+  }
+
+  async function deleteSession(sessionId) {
+    await deleteSessionApi(sessionId)
+    sessions.value = sessions.value.filter(item => item.id !== sessionId)
+    if (currentSessionId.value === sessionId) {
+      currentSessionId.value = sessions.value[0]?.id || null
+      persistStoredSession(graphStore.currentGraphId, currentSessionId.value)
+      await loadMessagesForSession(currentSessionId.value)
+    }
+  }
 
   async function addMessage(role, content, context = null) {
+    const graphId = graphStore.currentGraphId
+    const sessionId = currentSessionId.value
+    if (!graphId || !sessionId) return null
+
     const msg = {
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      id: generateId('m'),
+      graphId,
       role,
       content,
       context,
@@ -20,15 +182,13 @@ export const useRagStore = defineStore('rag', () => {
     }
     messages.value.push(msg)
 
-    // Persist to backend
-    const graphId = graphStore.currentGraphId
-    if (graphId) {
-      try {
-        await postMessage(graphId, msg)
-      } catch (e) {
-        console.warn('[ragStore] Failed to save message to backend:', e.message)
-      }
+    try {
+      await postMessage(sessionId, msg)
+    } catch (error) {
+      console.warn('[ragStore] failed to persist message:', error.message)
     }
+
+    return msg
   }
 
   function setLoading(val) {
@@ -42,47 +202,33 @@ export const useRagStore = defineStore('rag', () => {
   async function clearMessages() {
     messages.value = []
     lastContext.value = null
-
-    const graphId = graphStore.currentGraphId
-    if (graphId) {
-      try {
-        await clearMessagesApi(graphId)
-      } catch (e) {
-        console.warn('[ragStore] Failed to clear messages in backend:', e.message)
-      }
-    }
-  }
-
-  // ── Load messages from backend ────────────────────────────
-
-  async function loadMessages(graphId) {
-    if (!graphId) {
-      messages.value = []
-      lastContext.value = null
-      return
-    }
+    resetGraphView()
+    if (!currentSessionId.value) return
     try {
-      const data = await fetchMessages(graphId)
-      messages.value = data || []
-    } catch (e) {
-      console.warn('[ragStore] Failed to load messages:', e.message)
-      messages.value = []
+      await clearMessagesApi(currentSessionId.value)
+    } catch (error) {
+      console.warn('[ragStore] failed to clear messages:', error.message)
     }
-    lastContext.value = null
   }
 
-  // React to graph switching — load messages for the new graph
-  watch(() => graphStore.currentGraphId, (newId) => {
-    loadMessages(newId)
-  })
-
-  // Init: load messages for the graph that was restored on startup
-  if (graphStore.currentGraphId) {
-    loadMessages(graphStore.currentGraphId)
-  }
+  watch(() => graphStore.currentGraphId, ensureDefaultSession, { immediate: true })
 
   return {
-    messages, isLoading, lastContext,
-    addMessage, setLoading, setLastContext, clearMessages
+    sessions,
+    currentSessionId,
+    currentSession,
+    messages,
+    isLoading,
+    lastContext,
+    activeMessageId,
+    createSession,
+    switchSession,
+    renameSession,
+    deleteSession,
+    addMessage,
+    setLoading,
+    setLastContext,
+    selectMessage,
+    clearMessages
   }
 })

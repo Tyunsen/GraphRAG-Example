@@ -20,12 +20,14 @@ function run(sql, params = []) {
   db.run(sql, params)
 }
 
-// ── Get all messages for a graph ────────────────────────────
-router.get('/:graphId', (req, res) => {
+router.get('/session/:sessionId', (req, res) => {
   try {
-    const messages = allRows('SELECT * FROM messages WHERE graphId = ? ORDER BY timestamp ASC', [req.params.graphId]).map(m => ({
-      ...m,
-      context: m.context ? JSON.parse(m.context) : null
+    const messages = allRows(
+      'SELECT * FROM messages WHERE sessionId = ? ORDER BY timestamp ASC',
+      [req.params.sessionId]
+    ).map(message => ({
+      ...message,
+      context: message.context ? JSON.parse(message.context) : null
     }))
     res.json(messages)
   } catch (e) {
@@ -33,14 +35,25 @@ router.get('/:graphId', (req, res) => {
   }
 })
 
-// ── Add a message ───────────────────────────────────────────
-router.post('/:graphId', (req, res) => {
+router.post('/session/:sessionId', (req, res) => {
   try {
-    const { id, role, content, context, timestamp } = req.body
+    const { id, graphId, role, content, context, timestamp } = req.body || {}
     run(
-      'INSERT INTO messages (id, graphId, role, content, context, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, req.params.graphId, role, content, context ? JSON.stringify(context) : null, timestamp || Date.now()]
+      `
+      INSERT INTO messages (id, graphId, sessionId, role, content, context, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        id,
+        graphId,
+        req.params.sessionId,
+        role,
+        content,
+        context ? JSON.stringify(context) : null,
+        timestamp || Date.now()
+      ]
     )
+    run('UPDATE sessions SET updatedAt = ? WHERE id = ?', [Date.now(), req.params.sessionId])
     saveToDisk()
     res.json({ success: true })
   } catch (e) {
@@ -48,10 +61,9 @@ router.post('/:graphId', (req, res) => {
   }
 })
 
-// ── Clear all messages for a graph ──────────────────────────
-router.delete('/:graphId', (req, res) => {
+router.delete('/session/:sessionId', (req, res) => {
   try {
-    run('DELETE FROM messages WHERE graphId = ?', [req.params.graphId])
+    run('DELETE FROM messages WHERE sessionId = ?', [req.params.sessionId])
     saveToDisk()
     res.json({ success: true })
   } catch (e) {

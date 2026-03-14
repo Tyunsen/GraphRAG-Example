@@ -1,56 +1,74 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import { normalizeLabel } from '@/utils/textTokenizer'
-import { generateId, generateEdgeId } from '@/utils/idGenerator'
+import { generateEdgeId, generateId } from '@/utils/idGenerator'
 import {
-  fetchGraphList, fetchGraph, saveGraph as saveGraphApi,
-  renameGraphApi, deleteGraphApi, removeImportApi
+  createWorkspaceApi,
+  deleteGraphApi,
+  fetchGraph,
+  fetchGraphList,
+  removeImportApi,
+  renameGraphApi,
+  saveGraph as saveGraphApi
 } from '@/services/apiClient'
 
-// ── Fallback localStorage keys (only used if backend unavailable) ──
-const CURRENT_GRAPH_KEY = 'zstp-current-graph'
+const CURRENT_GRAPH_KEY = 'zstp-current-workspace'
 
 function loadCurrentGraphId() {
   return localStorage.getItem(CURRENT_GRAPH_KEY) || null
 }
 
 export const useGraphStore = defineStore('graph', () => {
-  // ── Core graph state ────────────────────────────────────
   const nodes = ref(new Map())
   const edges = ref(new Map())
-  const labelIndex = ref(new Map())   // normalizedLabel -> nodeId
-  const adjacency = ref(new Map())    // nodeId -> Set<edgeId>
+  const labelIndex = ref(new Map())
+  const adjacency = ref(new Map())
   const graphVersion = ref(0)
   const importHistory = ref([])
   const highlightedNodes = ref(new Set())
   const selectedNode = ref(null)
+  const focusedNodeIds = ref(null)
+  const focusedEdgeIds = ref(null)
 
-  // ── Persistence state ───────────────────────────────────
   const savedGraphs = ref([])
   const currentGraphId = ref(loadCurrentGraphId())
   const backendReady = ref(false)
 
-  // ── Computed ────────────────────────────────────────────
-  const nodeList = computed(() => Array.from(nodes.value.values()))
-  const edgeList = computed(() => Array.from(edges.value.values()))
+  const nodeList = computed(() => {
+    if (!focusedNodeIds.value) return Array.from(nodes.value.values())
+    return Array.from(focusedNodeIds.value)
+      .map(nodeId => nodes.value.get(nodeId))
+      .filter(Boolean)
+  })
+  const edgeList = computed(() => {
+    if (!focusedEdgeIds.value) return Array.from(edges.value.values())
+    return Array.from(focusedEdgeIds.value)
+      .map(edgeId => edges.value.get(edgeId))
+      .filter(Boolean)
+  })
   const nodeCount = computed(() => nodes.value.size)
   const edgeCount = computed(() => edges.value.size)
+  const isFocusedView = computed(() => focusedNodeIds.value instanceof Set)
 
   const typeSet = computed(() => {
     const types = new Set()
-    for (const node of nodes.value.values()) {
+    for (const node of nodeList.value) {
       if (node.type) types.add(node.type)
     }
     return types
   })
 
-  const currentGraphName = computed(() => {
-    if (!currentGraphId.value) return null
-    const g = savedGraphs.value.find(g => g.id === currentGraphId.value)
-    return g ? g.name : null
-  })
+  const currentGraphMeta = computed(() =>
+    savedGraphs.value.find(item => item.id === currentGraphId.value) || null
+  )
+  const currentGraphName = computed(() => currentGraphMeta.value?.name || null)
+  const currentIntentQuery = computed(() => currentGraphMeta.value?.intentQuery || '')
 
-  // ── Node / Edge operations ──────────────────────────────
+  function persistCurrentGraphId() {
+    if (currentGraphId.value) localStorage.setItem(CURRENT_GRAPH_KEY, currentGraphId.value)
+    else localStorage.removeItem(CURRENT_GRAPH_KEY)
+  }
+
   function getNodeDegree(nodeId) {
     const adj = adjacency.value.get(nodeId)
     return adj ? adj.size : 0
@@ -67,6 +85,7 @@ export const useGraphStore = defineStore('graph', () => {
       }
       return existingId
     }
+
     const id = node.id || generateId('n')
     const newNode = {
       id,
@@ -78,9 +97,7 @@ export const useGraphStore = defineStore('graph', () => {
     }
     nodes.value.set(id, newNode)
     labelIndex.value.set(normalized, id)
-    if (!adjacency.value.has(id)) {
-      adjacency.value.set(id, new Set())
-    }
+    if (!adjacency.value.has(id)) adjacency.value.set(id, new Set())
     return id
   }
 
@@ -117,21 +134,18 @@ export const useGraphStore = defineStore('graph', () => {
     if (!adjacency.value.has(targetId)) adjacency.value.set(targetId, new Set())
     adjacency.value.get(sourceId).add(edgeKey)
     adjacency.value.get(targetId).add(edgeKey)
-
     return edgeKey
   }
 
-  // ── Graph mutation (with auto-save) ─────────────────────
   function mergeGraph(parsedData, sourceFile) {
     const { nodes: newNodes = [], edges: newEdges = [] } = parsedData
-
-    for (const n of newNodes) {
-      n.sourceFile = sourceFile
-      addNode(n)
+    for (const node of newNodes) {
+      node.sourceFile = sourceFile
+      addNode(node)
     }
-    for (const e of newEdges) {
-      e.sourceFile = sourceFile
-      addEdge(e)
+    for (const edge of newEdges) {
+      edge.sourceFile = sourceFile
+      addEdge(edge)
     }
 
     importHistory.value.push({
@@ -141,51 +155,43 @@ export const useGraphStore = defineStore('graph', () => {
       nodesAdded: newNodes.length,
       edgesAdded: newEdges.length
     })
-
     graphVersion.value++
-
-    // Auto-save: create new graph entry if none, then persist
-    if (!currentGraphId.value) {
-      currentGraphId.value = generateId('g')
-    }
     saveCurrentGraph(sourceFile)
   }
 
   async function removeImport(importId) {
-    const record = importHistory.value.find(h => h.id === importId)
+    const record = importHistory.value.find(item => item.id === importId)
     if (!record) return
 
     const fileName = record.fileName
-    for (const [eid, edge] of edges.value) {
+    for (const [edgeId, edge] of edges.value) {
       if (edge.sourceFile === fileName) {
-        edges.value.delete(eid)
-        const srcAdj = adjacency.value.get(edge.source)
-        if (srcAdj) srcAdj.delete(eid)
-        const tgtAdj = adjacency.value.get(edge.target)
-        if (tgtAdj) tgtAdj.delete(eid)
+        edges.value.delete(edgeId)
+        adjacency.value.get(edge.source)?.delete(edgeId)
+        adjacency.value.get(edge.target)?.delete(edgeId)
       }
     }
-    for (const [nid, node] of nodes.value) {
+
+    for (const [nodeId, node] of nodes.value) {
       if (node.sourceFile === fileName) {
-        const adj = adjacency.value.get(nid)
+        const adj = adjacency.value.get(nodeId)
         if (!adj || adj.size === 0) {
-          nodes.value.delete(nid)
+          nodes.value.delete(nodeId)
           labelIndex.value.delete(normalizeLabel(node.label))
-          adjacency.value.delete(nid)
+          adjacency.value.delete(nodeId)
         }
       }
     }
 
-    importHistory.value = importHistory.value.filter(h => h.id !== importId)
+    importHistory.value = importHistory.value.filter(item => item.id !== importId)
     graphVersion.value++
 
-    // Persist to backend
     if (currentGraphId.value) {
       try {
         await removeImportApi(currentGraphId.value, importId)
-      } catch (e) {
-        console.warn('[graphStore] Backend removeImport failed, saving full graph:', e.message)
-        saveCurrentGraph()
+      } catch (error) {
+        console.warn('[graphStore] removeImport failed, falling back to save:', error.message)
+        await saveCurrentGraph()
       }
     }
   }
@@ -196,12 +202,13 @@ export const useGraphStore = defineStore('graph', () => {
     labelIndex.value.clear()
     adjacency.value.clear()
     importHistory.value = []
+    focusedNodeIds.value = null
+    focusedEdgeIds.value = null
     highlightedNodes.value.clear()
     selectedNode.value = null
     graphVersion.value++
   }
 
-  // ── BFS subgraph ────────────────────────────────────────
   function bfsSubgraph(seedNodeIds, maxDepth = 2, maxNodes = 50) {
     const visited = new Set()
     const subEdges = new Set()
@@ -209,42 +216,65 @@ export const useGraphStore = defineStore('graph', () => {
 
     for (let depth = 0; depth <= maxDepth && frontier.length > 0; depth++) {
       const nextFrontier = []
-      for (const nid of frontier) {
-        if (visited.has(nid) || visited.size >= maxNodes) continue
-        visited.add(nid)
-        const adj = adjacency.value.get(nid)
+      for (const nodeId of frontier) {
+        if (visited.has(nodeId) || visited.size >= maxNodes) continue
+        visited.add(nodeId)
+        const adj = adjacency.value.get(nodeId)
         if (!adj) continue
-        for (const eid of adj) {
-          subEdges.add(eid)
-          const edge = edges.value.get(eid)
+        for (const edgeId of adj) {
+          subEdges.add(edgeId)
+          const edge = edges.value.get(edgeId)
           if (!edge) continue
-          const neighbor = edge.source === nid ? edge.target : edge.source
-          if (!visited.has(neighbor)) {
-            nextFrontier.push(neighbor)
-          }
+          const neighbor = edge.source === nodeId ? edge.target : edge.source
+          if (!visited.has(neighbor)) nextFrontier.push(neighbor)
         }
       }
       frontier = nextFrontier
     }
 
     const subNodes = []
-    for (const nid of visited) {
-      const node = nodes.value.get(nid)
+    for (const nodeId of visited) {
+      const node = nodes.value.get(nodeId)
       if (node) subNodes.push(node)
     }
+
     const subEdgeList = []
-    for (const eid of subEdges) {
-      const edge = edges.value.get(eid)
-      if (edge && visited.has(edge.source) && visited.has(edge.target)) {
-        subEdgeList.push(edge)
-      }
+    for (const edgeId of subEdges) {
+      const edge = edges.value.get(edgeId)
+      if (edge && visited.has(edge.source) && visited.has(edge.target)) subEdgeList.push(edge)
     }
+
     return { nodes: subNodes, edges: subEdgeList }
   }
 
-  // ── Highlights ──────────────────────────────────────────
   function setHighlightedNodes(nodeIds) {
     highlightedNodes.value = new Set(nodeIds)
+    graphVersion.value++
+  }
+
+  function focusSubgraph(subgraph) {
+    if (!subgraph?.nodes?.length) {
+      showFullGraph()
+      return
+    }
+
+    focusedNodeIds.value = new Set(subgraph.nodes.map(node => node.id).filter(Boolean))
+    focusedEdgeIds.value = new Set(
+      (subgraph.edges || [])
+        .filter(edge =>
+          focusedNodeIds.value.has(edge.source) &&
+          focusedNodeIds.value.has(edge.target)
+        )
+        .map(edge => edge.id)
+    )
+    selectedNode.value = null
+    graphVersion.value++
+  }
+
+  function showFullGraph() {
+    focusedNodeIds.value = null
+    focusedEdgeIds.value = null
+    selectedNode.value = null
     graphVersion.value++
   }
 
@@ -253,7 +283,6 @@ export const useGraphStore = defineStore('graph', () => {
     graphVersion.value++
   }
 
-  // ── Serialize / Deserialize ─────────────────────────────
   function serializeGraph() {
     return {
       nodes: Array.from(nodes.value.values()),
@@ -263,101 +292,99 @@ export const useGraphStore = defineStore('graph', () => {
   }
 
   function deserializeGraph(data) {
-    nodes.value.clear()
-    edges.value.clear()
-    labelIndex.value.clear()
-    adjacency.value.clear()
-    highlightedNodes.value.clear()
-    selectedNode.value = null
+    clearGraph()
     importHistory.value = data.importHistory || []
 
-    for (const n of (data.nodes || [])) {
-      nodes.value.set(n.id, n)
-      labelIndex.value.set(normalizeLabel(n.label), n.id)
-      adjacency.value.set(n.id, new Set())
+    for (const node of data.nodes || []) {
+      nodes.value.set(node.id, node)
+      labelIndex.value.set(normalizeLabel(node.label), node.id)
+      adjacency.value.set(node.id, new Set())
     }
 
-    for (const e of (data.edges || [])) {
-      edges.value.set(e.id, e)
-      if (!adjacency.value.has(e.source)) adjacency.value.set(e.source, new Set())
-      if (!adjacency.value.has(e.target)) adjacency.value.set(e.target, new Set())
-      adjacency.value.get(e.source).add(e.id)
-      adjacency.value.get(e.target).add(e.id)
+    for (const edge of data.edges || []) {
+      edges.value.set(edge.id, edge)
+      if (!adjacency.value.has(edge.source)) adjacency.value.set(edge.source, new Set())
+      if (!adjacency.value.has(edge.target)) adjacency.value.set(edge.target, new Set())
+      adjacency.value.get(edge.source).add(edge.id)
+      adjacency.value.get(edge.target).add(edge.id)
     }
 
     graphVersion.value++
   }
-
-  function persistCurrentGraphId() {
-    if (currentGraphId.value) {
-      localStorage.setItem(CURRENT_GRAPH_KEY, currentGraphId.value)
-    } else {
-      localStorage.removeItem(CURRENT_GRAPH_KEY)
-    }
-  }
-
-  // ── Persistence: public API (now uses backend) ──────────
 
   async function saveCurrentGraph(nameHint) {
     const id = currentGraphId.value
     if (!id) return
 
     const data = serializeGraph()
-    const existing = savedGraphs.value.find(g => g.id === id)
-
+    const existing = currentGraphMeta.value
     try {
       await saveGraphApi(id, {
-        name: nameHint || (existing ? existing.name : `图谱 ${savedGraphs.value.length + 1}`),
+        name: existing?.name || nameHint || `工作区 ${savedGraphs.value.length + 1}`,
+        intentQuery: existing?.intentQuery || '',
+        intentSummary: existing?.intentSummary || '',
         nodes: data.nodes,
         edges: data.edges,
         importHistory: data.importHistory
       })
-    } catch (e) {
-      console.warn('[graphStore] Failed to save graph to backend:', e.message)
+    } catch (error) {
+      console.warn('[graphStore] save failed:', error.message)
     }
 
-    // Update local list
     if (existing) {
       existing.nodeCount = nodes.value.size
       existing.edgeCount = edges.value.size
       existing.updatedAt = Date.now()
-    } else {
-      savedGraphs.value.push({
-        id,
-        name: nameHint || `图谱 ${savedGraphs.value.length + 1}`,
-        nodeCount: nodes.value.size,
-        edgeCount: edges.value.size,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      })
     }
-
     persistCurrentGraphId()
   }
 
   async function loadGraph(graphId) {
     try {
       const data = await fetchGraph(graphId)
-      if (!data) return false
       deserializeGraph(data)
       currentGraphId.value = graphId
+      const index = savedGraphs.value.findIndex(item => item.id === graphId)
+      if (index !== -1) savedGraphs.value[index] = { ...savedGraphs.value[index], ...data }
       persistCurrentGraphId()
       return true
-    } catch (e) {
-      console.warn('[graphStore] Failed to load graph:', e.message)
+    } catch (error) {
+      console.warn('[graphStore] load failed:', error.message)
       return false
     }
+  }
+
+  async function createWorkspace({ name, intentQuery, intentSummary = '' }) {
+    const id = generateId('g')
+    const payload = {
+      id,
+      name: name?.trim() || '未命名工作区',
+      intentQuery: intentQuery?.trim() || '',
+      intentSummary: intentSummary?.trim() || ''
+    }
+    await createWorkspaceApi(payload)
+    clearGraph()
+    currentGraphId.value = id
+    savedGraphs.value.unshift({
+      ...payload,
+      nodeCount: 0,
+      edgeCount: 0,
+      fileCount: 0,
+      sessionCount: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    })
+    persistCurrentGraphId()
   }
 
   async function deleteSavedGraph(graphId) {
     try {
       await deleteGraphApi(graphId)
-    } catch (e) {
-      console.warn('[graphStore] Failed to delete graph from backend:', e.message)
+    } catch (error) {
+      console.warn('[graphStore] delete failed:', error.message)
     }
 
-    savedGraphs.value = savedGraphs.value.filter(g => g.id !== graphId)
-
+    savedGraphs.value = savedGraphs.value.filter(item => item.id !== graphId)
     if (currentGraphId.value === graphId) {
       clearGraph()
       currentGraphId.value = null
@@ -365,15 +392,14 @@ export const useGraphStore = defineStore('graph', () => {
     }
   }
 
-  async function renameGraph(graphId, newName) {
-    const entry = savedGraphs.value.find(g => g.id === graphId)
-    if (entry) {
-      entry.name = newName
-      try {
-        await renameGraphApi(graphId, newName)
-      } catch (e) {
-        console.warn('[graphStore] Failed to rename graph in backend:', e.message)
-      }
+  async function renameGraph(graphId, payload) {
+    const entry = savedGraphs.value.find(item => item.id === graphId)
+    if (!entry) return
+    Object.assign(entry, payload)
+    try {
+      await renameGraphApi(graphId, payload)
+    } catch (error) {
+      console.warn('[graphStore] rename/update failed:', error.message)
     }
   }
 
@@ -383,41 +409,67 @@ export const useGraphStore = defineStore('graph', () => {
     persistCurrentGraphId()
   }
 
-  // ── Init: restore from backend ──────────────────────────
   async function initFromBackend() {
     try {
-      const list = await fetchGraphList()
-      savedGraphs.value = list
+      savedGraphs.value = await fetchGraphList()
       backendReady.value = true
-
       if (currentGraphId.value) {
         const loaded = await loadGraph(currentGraphId.value)
         if (!loaded) {
           currentGraphId.value = null
           persistCurrentGraphId()
         }
+      } else if (savedGraphs.value.length > 0) {
+        currentGraphId.value = savedGraphs.value[0].id
+        persistCurrentGraphId()
+        await loadGraph(currentGraphId.value)
       }
-    } catch (e) {
-      console.warn('[graphStore] Backend unavailable, starting with empty state:', e.message)
+    } catch (error) {
+      console.warn('[graphStore] backend unavailable:', error.message)
       backendReady.value = false
     }
   }
 
-  // Auto-init from backend
   initFromBackend()
 
   return {
-    // Core state
-    nodes, edges, labelIndex, adjacency, graphVersion,
-    importHistory, highlightedNodes, selectedNode,
-    // Computed
-    nodeList, edgeList, nodeCount, edgeCount, typeSet, currentGraphName,
-    // Core operations
-    getNodeDegree, addNode, addEdge, resolveNodeId,
-    mergeGraph, removeImport, clearGraph,
-    bfsSubgraph, setHighlightedNodes, clearHighlights,
-    // Persistence
-    savedGraphs, currentGraphId, backendReady,
-    saveCurrentGraph, loadGraph, deleteSavedGraph, renameGraph, createNewGraph
+    nodes,
+    edges,
+    labelIndex,
+    adjacency,
+    graphVersion,
+    importHistory,
+    highlightedNodes,
+    selectedNode,
+    isFocusedView,
+    nodeList,
+    edgeList,
+    nodeCount,
+    edgeCount,
+    typeSet,
+    currentGraphMeta,
+    currentGraphName,
+    currentIntentQuery,
+    getNodeDegree,
+    addNode,
+    addEdge,
+    resolveNodeId,
+    mergeGraph,
+    removeImport,
+    clearGraph,
+    bfsSubgraph,
+    setHighlightedNodes,
+    focusSubgraph,
+    showFullGraph,
+    clearHighlights,
+    savedGraphs,
+    currentGraphId,
+    backendReady,
+    saveCurrentGraph,
+    loadGraph,
+    deleteSavedGraph,
+    renameGraph,
+    createNewGraph,
+    createWorkspace
   }
 })

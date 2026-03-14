@@ -1,7 +1,3 @@
-/**
- * Frontend API client for communicating with the Express/SQLite backend
- */
-
 const BASE = '/api'
 
 async function request(path, options = {}) {
@@ -17,62 +13,94 @@ async function request(path, options = {}) {
   return res.json()
 }
 
-// ── Graphs ──────────────────────────────────────────────────
-
 export async function fetchGraphList() {
-  return request('/graphs')
+  return request('/workspaces')
+}
+
+export async function createWorkspaceApi(payload) {
+  return request('/workspaces', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
 }
 
 export async function fetchGraph(graphId) {
-  return request(`/graphs/${graphId}`)
+  return request(`/workspaces/${graphId}`)
+}
+
+export async function fetchWorkspaceContext(graphId, payload) {
+  return request(`/workspaces/${graphId}/context`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
 }
 
 export async function saveGraph(graphId, data) {
-  return request(`/graphs/${graphId}`, {
+  return request(`/workspaces/${graphId}`, {
     method: 'PUT',
     body: JSON.stringify(data)
   })
 }
 
-export async function renameGraphApi(graphId, name) {
-  return request(`/graphs/${graphId}`, {
+export async function renameGraphApi(graphId, payload) {
+  return request(`/workspaces/${graphId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ name })
+    body: JSON.stringify(payload)
   })
 }
 
 export async function deleteGraphApi(graphId) {
-  return request(`/graphs/${graphId}`, {
+  return request(`/workspaces/${graphId}`, {
     method: 'DELETE'
   })
 }
 
 export async function removeImportApi(graphId, importId) {
-  return request(`/graphs/${graphId}/imports/${importId}`, {
+  return request(`/workspaces/${graphId}/imports/${importId}`, {
     method: 'DELETE'
   })
 }
 
-// ── Messages ────────────────────────────────────────────────
-
-export async function fetchMessages(graphId) {
-  return request(`/messages/${graphId}`)
+export async function fetchSessions(graphId) {
+  return request(`/sessions/${graphId}`)
 }
 
-export async function postMessage(graphId, message) {
-  return request(`/messages/${graphId}`, {
+export async function createSessionApi(graphId, payload) {
+  return request(`/sessions/${graphId}`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function renameSessionApi(sessionId, title) {
+  return request(`/sessions/detail/${sessionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title })
+  })
+}
+
+export async function deleteSessionApi(sessionId) {
+  return request(`/sessions/detail/${sessionId}`, {
+    method: 'DELETE'
+  })
+}
+
+export async function fetchMessages(sessionId) {
+  return request(`/messages/session/${sessionId}`)
+}
+
+export async function postMessage(sessionId, message) {
+  return request(`/messages/session/${sessionId}`, {
     method: 'POST',
     body: JSON.stringify(message)
   })
 }
 
-export async function clearMessagesApi(graphId) {
-  return request(`/messages/${graphId}`, {
+export async function clearMessagesApi(sessionId) {
+  return request(`/messages/session/${sessionId}`, {
     method: 'DELETE'
   })
 }
-
-// ── Files ───────────────────────────────────────────────────
 
 export async function fetchFiles(graphId) {
   return request(`/files/${graphId}`)
