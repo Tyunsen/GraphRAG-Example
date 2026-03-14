@@ -9,6 +9,7 @@ import graphsRouter from './routes/graphs.js'
 import messagesRouter from './routes/messages.js'
 import filesRouter from './routes/files.js'
 import sessionsRouter from './routes/sessions.js'
+import importJobsRouter from './routes/importJobs.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -50,6 +51,7 @@ app.use('/api/workspaces', graphsRouter)
 app.use('/api/messages', messagesRouter)
 app.use('/api/files', filesRouter)
 app.use('/api/sessions', sessionsRouter)
+app.use('/api/import-jobs', importJobsRouter)
 
 app.post('/api/llm/chat/completions', async (req, res) => {
   if (!LLM_API_KEY) {

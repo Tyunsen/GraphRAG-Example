@@ -1,26 +1,26 @@
-import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { defineStore } from 'pinia'
 import { useGraphStore } from './graphStore'
 import { useSettingsStore } from './settingsStore'
 import { parseJSON } from '@/services/parsers/jsonParser'
 import { parseCSV } from '@/services/parsers/csvParser'
-import { parseTXT } from '@/services/parsers/txtParser'
-import { parseMD } from '@/services/parsers/mdParser'
-import { parsePDF } from '@/services/parsers/pdfParser'
-import { extractWithLLM } from '@/services/llmExtractor'
-import { saveFileContent } from '@/services/apiClient'
+import { createImportJobApi, fetchImportJobApi } from '@/services/apiClient'
 import { generateId } from '@/utils/idGenerator'
 
 const DEFAULT_STAGES = [
   { key: 'receive', label: '文件接收', status: 'idle', detail: '' },
   { key: 'parse', label: '文本解析', status: 'idle', detail: '' },
   { key: 'extract', label: '意图抽取', status: 'idle', detail: '' },
-  { key: 'structure', label: '实体事件识别', status: 'idle', detail: '' },
-  { key: 'persist', label: '导入完成', status: 'idle', detail: '' }
+  { key: 'persist', label: '图谱更新', status: 'idle', detail: '' },
+  { key: 'complete', label: '导入完成', status: 'idle', detail: '' }
 ]
 
 function cloneStages() {
   return DEFAULT_STAGES.map(item => ({ ...item }))
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 export const useImportStore = defineStore('import', () => {
@@ -35,87 +35,42 @@ export const useImportStore = defineStore('import', () => {
   const stages = ref(cloneStages())
   const processLogs = ref([])
   const extractionSummary = ref(null)
+  const activeJobId = ref(null)
+  const jobSnapshot = ref(null)
 
   const currentStage = computed(() =>
     stages.value.find(item => item.status === 'running') || null
   )
 
   const hasActivity = computed(() =>
-    Boolean(currentFileName.value || parseError.value || lastResult.value || processLogs.value.length)
+    Boolean(activeJobId.value || currentFileName.value || parseError.value || processLogs.value.length)
   )
 
   function getExt(fileName) {
-    return fileName.split('.').pop().toLowerCase()
+    return String(fileName || '').split('.').pop().toLowerCase()
   }
 
-  function isUnstructuredType(ext) {
-    return ['txt', 'md', 'markdown', 'pdf'].includes(ext)
-  }
-
-  function canUseLLM() {
-    return settings.useLLMExtraction && settings.isApiConfigured
-  }
-
-  function resetProcess(fileName = '') {
-    currentFileName.value = fileName
-    stages.value = cloneStages()
-    processLogs.value = []
-    extractionSummary.value = null
-    parseError.value = null
-  }
-
-  function clearProcess() {
-    currentFileName.value = ''
+  function resetProcess(label = '') {
+    currentFileName.value = label
     stages.value = cloneStages()
     processLogs.value = []
     extractionSummary.value = null
     parseError.value = null
     lastResult.value = null
+    jobSnapshot.value = null
+  }
+
+  function clearProcess() {
     parsing.value = false
     extracting.value = false
-  }
-
-  function updateStage(key, status, detail = '') {
-    stages.value = stages.value.map(stage => {
-      if (stage.key === key) {
-        return { ...stage, status, detail: detail || stage.detail }
-      }
-      if (status === 'running' && stage.status === 'running') {
-        return { ...stage, status: 'done' }
-      }
-      return stage
-    })
-  }
-
-  function pushLog(message) {
-    const time = new Date().toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
-    processLogs.value = [...processLogs.value, `${time} ${message}`]
-  }
-
-  function buildSummary(result, method) {
-    const nodes = result.nodes || []
-    extractionSummary.value = {
-      method,
-      nodeCount: nodes.length,
-      edgeCount: (result.edges || []).length,
-      entityLabels: nodes.filter(node => node.type !== '事件').slice(0, 6).map(node => node.label),
-      eventLabels: nodes.filter(node => node.type === '事件').slice(0, 4).map(node => node.label)
-    }
-  }
-
-  function fallbackParse(ext, text) {
-    switch (ext) {
-      case 'md':
-      case 'markdown':
-        return parseMD(text)
-      case 'txt':
-      default:
-        return parseTXT(text)
-    }
+    parseError.value = null
+    lastResult.value = null
+    currentFileName.value = ''
+    stages.value = cloneStages()
+    processLogs.value = []
+    extractionSummary.value = null
+    activeJobId.value = null
+    jobSnapshot.value = null
   }
 
   async function extractPdfText(arrayBuffer) {
@@ -134,8 +89,8 @@ export const useImportStore = defineStore('import', () => {
 
     const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
     const pages = []
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i)
+    for (let index = 1; index <= pdf.numPages; index++) {
+      const page = await pdf.getPage(index)
       const content = await page.getTextContent()
       const lines = new Map()
       for (const item of content.items) {
@@ -146,197 +101,132 @@ export const useImportStore = defineStore('import', () => {
       }
       const sorted = Array.from(lines.entries())
         .sort((a, b) => b[0] - a[0])
-        .map(([, strs]) => strs.join(' '))
+        .map(([, texts]) => texts.join(' '))
       pages.push(sorted.join('\n'))
     }
     return pages.join('\n\n')
   }
 
-  async function parseFile(file) {
-    parsing.value = true
-    extracting.value = false
-    parseError.value = null
-    lastResult.value = null
-    resetProcess(file.name)
+  async function prepareFilePayload(file) {
+    const ext = getExt(file.name)
+    let content = ''
 
-    try {
-      if (!graphStore.currentGraphId || !graphStore.currentIntentQuery) {
-        throw new Error('请先创建工作区，并填写该工作区的总意图后再导入文档。')
-      }
+    if (ext === 'pdf') {
+      content = await extractPdfText(await file.arrayBuffer())
+    } else {
+      content = await file.text()
+    }
 
-      updateStage('receive', 'running', `已接收 ${file.name}`)
-      pushLog(`已接收文件 ${file.name}`)
-      updateStage('receive', 'done', `文件大小 ${Math.max(1, Math.round(file.size / 1024))} KB`)
+    let precomputedGraph = null
+    if (ext === 'json') {
+      precomputedGraph = parseJSON(content)
+    } else if (ext === 'csv') {
+      precomputedGraph = parseCSV(content)
+    }
 
-      const ext = getExt(file.name)
-      let result
-      let fileTextContent = null
-      let extractionMethod = '规则解析'
-
-      updateStage('parse', 'running', `正在解析 ${ext.toUpperCase()} 内容`)
-      pushLog('开始解析文件内容')
-
-      if (ext === 'json') {
-        const text = await file.text()
-        fileTextContent = text
-        result = parseJSON(text)
-      } else if (ext === 'csv') {
-        const text = await file.text()
-        fileTextContent = text
-        result = parseCSV(text)
-      } else if (isUnstructuredType(ext) && canUseLLM()) {
-        let plainText
-        if (ext === 'pdf') {
-          const arrayBuffer = await file.arrayBuffer()
-          plainText = await extractPdfText(arrayBuffer)
-        } else {
-          plainText = await file.text()
-        }
-        fileTextContent = plainText
-        updateStage('parse', 'done', `解析得到 ${plainText.length} 个字符`)
-
-        extracting.value = true
-        updateStage('extract', 'running', '正在按工作区意图调用模型')
-        pushLog('开始按工作区意图抽取实体和事件')
-        extractionMethod = 'LLM 意图抽取'
-
-        try {
-          result = await extractWithLLM(plainText, settings, {
-            workspaceIntent: graphStore.currentIntentQuery,
-            fileName: file.name
-          })
-          updateStage('extract', 'done', '意图抽取完成')
-        } catch (llmErr) {
-          console.warn('LLM extraction failed, falling back to regex:', llmErr.message)
-          pushLog(`模型抽取失败，已回退到规则解析：${llmErr.message}`)
-          updateStage('extract', 'done', '模型抽取失败，已回退规则解析')
-          extractionMethod = '规则回退解析'
-          result = fallbackParse(ext, plainText)
-        }
-
-        extracting.value = false
-      } else {
-        if (ext === 'pdf') {
-          const arrayBuffer = await file.arrayBuffer()
-          fileTextContent = await extractPdfText(arrayBuffer)
-          result = await parsePDF(arrayBuffer)
-        } else {
-          const text = await file.text()
-          fileTextContent = text
-          result = fallbackParse(ext, text)
-        }
-      }
-
-      if (!result) throw new Error(`不支持的文件格式: ${ext}`)
-
-      if (stages.value.find(item => item.key === 'parse')?.status !== 'done') {
-        updateStage('parse', 'done', '解析完成')
-      }
-
-      updateStage('structure', 'running', '正在整理实体、事件和关系')
-      pushLog('开始整理抽取结果')
-
-      lastResult.value = {
-        fileName: file.name,
-        fileType: ext,
-        fileSize: file.size,
-        fileTextContent,
-        nodes: result.nodes,
-        edges: result.edges,
-        nodeCount: result.nodes.length,
-        edgeCount: result.edges.length
-      }
-
-      buildSummary(result, extractionMethod)
-      updateStage('structure', 'done', `识别 ${result.nodes.length} 个节点，${result.edges.length} 条关系`)
-      updateStage('persist', 'ready', '等待确认导入')
-      pushLog(`抽取完成：${result.nodes.length} 个节点，${result.edges.length} 条关系`)
-      return lastResult.value
-    } catch (error) {
-      parseError.value = error.message
-      const runningStage = stages.value.find(item => item.status === 'running')?.key || 'parse'
-      updateStage(runningStage, 'error', error.message)
-      pushLog(`处理失败：${error.message}`)
-      throw error
-    } finally {
-      parsing.value = false
-      extracting.value = false
+    return {
+      id: generateId('f'),
+      fileName: file.name,
+      fileType: ext,
+      fileSize: file.size,
+      content,
+      precomputedGraph
     }
   }
 
-  async function confirmImport() {
-    if (!lastResult.value) return
-
-    updateStage('persist', 'running', '正在写入图谱和文档库')
-    pushLog('开始写入图谱与段落证据')
-
-    graphStore.mergeGraph(
-      { nodes: lastResult.value.nodes, edges: lastResult.value.edges },
-      lastResult.value.fileName
+  function pickDisplayItem(job) {
+    const items = job?.items || []
+    return (
+      items.find(item => item.status === 'running') ||
+      [...items].reverse().find(item => item.status === 'error') ||
+      [...items].reverse().find(item => item.status === 'done') ||
+      items[0] ||
+      null
     )
+  }
 
-    const graphId = graphStore.currentGraphId
-    if (graphId && lastResult.value.fileTextContent) {
-      try {
-        await saveFileContent(graphId, {
-          id: generateId('f'),
-          fileName: lastResult.value.fileName,
-          content: lastResult.value.fileTextContent,
-          fileType: lastResult.value.fileType,
-          fileSize: lastResult.value.fileSize,
-          nodes: lastResult.value.nodes,
-          edges: lastResult.value.edges
-        })
-      } catch (error) {
-        console.warn('[importStore] failed to save file content:', error.message)
+  function applyJobSnapshot(job) {
+    jobSnapshot.value = job
+    const item = pickDisplayItem(job)
+
+    currentFileName.value = item?.fileName || ''
+    stages.value = item?.stages?.length ? item.stages : cloneStages()
+    processLogs.value = item?.logs || []
+    extractionSummary.value = item?.summary || null
+    parseError.value = item?.error || job?.error || null
+    parsing.value = Boolean(item && ['queued', 'running'].includes(item.status))
+    extracting.value = Boolean(item?.stages?.find(stage => stage.key === 'extract' && stage.status === 'running'))
+  }
+
+  async function waitForJob(jobId) {
+    while (activeJobId.value === jobId) {
+      const snapshot = await fetchImportJobApi(jobId)
+      applyJobSnapshot(snapshot)
+
+      if (['completed', 'completed-with-errors', 'failed'].includes(snapshot.status)) {
+        return snapshot
       }
+      await sleep(1200)
     }
-
-    updateStage('persist', 'done', '导入完成')
-    pushLog('文件已完成导入')
-
-    const imported = lastResult.value
-    lastResult.value = null
-    return imported
+    return null
   }
 
   async function importFiles(files, options = {}) {
-    const autoConfirm = Boolean(options.autoConfirm)
-    const onImported = typeof options.onImported === 'function' ? options.onImported : null
-    const onError = typeof options.onError === 'function' ? options.onError : null
-    const imported = []
-    const errors = []
-
-    for (const file of files || []) {
-      try {
-        await parseFile(file)
-        if (autoConfirm) {
-          const result = await confirmImport()
-          if (result) {
-            imported.push(result)
-            if (onImported) {
-              await onImported(result)
-            }
-          }
-        }
-      } catch (error) {
-        const nextError = {
-          fileName: file?.name || '',
-          message: error.message
-        }
-        errors.push(nextError)
-        if (onError) {
-          await onError(nextError)
-        }
-      }
+    if (!graphStore.currentGraphId || !graphStore.currentIntentQuery) {
+      throw new Error('请先创建工作区并填写总意图后再导入文件。')
     }
 
+    const selectedFiles = Array.from(files || [])
+    if (selectedFiles.length === 0) {
+      return { imported: [], errors: [] }
+    }
+
+    resetProcess(`准备上传 ${selectedFiles.length} 个文件`)
+    parsing.value = true
+
+    const payloadFiles = await Promise.all(selectedFiles.map(file => prepareFilePayload(file)))
+    parsing.value = false
+    extracting.value = true
+
+    const job = await createImportJobApi(graphStore.currentGraphId, {
+      files: payloadFiles,
+      options: {
+        useLLMExtraction: settings.useLLMExtraction,
+        extractionPrompt: settings.extractionPrompt,
+        modelName: settings.modelName,
+        temperature: settings.temperature,
+        maxTokens: settings.maxTokens
+      }
+    })
+
+    activeJobId.value = job.id
+    applyJobSnapshot(job)
+    const completedJob = await waitForJob(job.id)
+    extracting.value = false
+
+    const imported = (completedJob?.items || [])
+      .filter(item => item.status === 'done')
+      .map(item => ({
+        fileName: item.fileName,
+        fileType: item.fileType,
+        fileSize: item.fileSize,
+        summary: item.summary,
+        result: item.result
+      }))
+
+    const errors = (completedJob?.items || [])
+      .filter(item => item.status === 'error')
+      .map(item => ({
+        fileName: item.fileName,
+        message: item.error || '导入失败'
+      }))
+
+    lastResult.value = completedJob
     return { imported, errors }
   }
 
   function cancelImport() {
-    updateStage('persist', 'idle', '')
-    lastResult.value = null
+    activeJobId.value = null
   }
 
   return {
@@ -350,9 +240,9 @@ export const useImportStore = defineStore('import', () => {
     processLogs,
     extractionSummary,
     hasActivity,
-    parseFile,
+    activeJobId,
+    jobSnapshot,
     importFiles,
-    confirmImport,
     cancelImport,
     clearProcess
   }

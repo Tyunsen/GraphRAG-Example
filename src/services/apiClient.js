@@ -117,6 +117,17 @@ export async function saveFileContent(graphId, fileData) {
   })
 }
 
+export async function createImportJobApi(graphId, payload) {
+  return request(`/import-jobs/${graphId}`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function fetchImportJobApi(jobId) {
+  return request(`/import-jobs/detail/${jobId}`)
+}
+
 export async function deleteFileApi(graphId, fileId) {
   return request(`/files/${graphId}/detail/${fileId}`, {
     method: 'DELETE'

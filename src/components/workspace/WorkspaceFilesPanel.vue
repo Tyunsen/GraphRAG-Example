@@ -154,21 +154,17 @@ async function onFilesSelected(files) {
   const selectedFiles = Array.from(files || [])
   if (selectedFiles.length === 0) return
 
-  await importStore.importFiles(selectedFiles, {
-    autoConfirm: true,
-    onImported: async () => {
-      if (!graphStore.currentGraphId) return
-      await refreshFiles()
-      graphStore.syncCurrentGraphMeta({
-        fileCount: workspaceFiles.value.length,
-        nodeCount: graphStore.nodeCount,
-        edgeCount: graphStore.edgeCount,
-        updatedAt: Date.now()
-      })
-      await graphStore.loadGraph(graphStore.currentGraphId)
-      await graphStore.refreshGraphList()
-    }
+  await importStore.importFiles(selectedFiles)
+  if (!graphStore.currentGraphId) return
+  await graphStore.loadGraph(graphStore.currentGraphId)
+  await refreshFiles()
+  graphStore.syncCurrentGraphMeta({
+    fileCount: workspaceFiles.value.length,
+    nodeCount: graphStore.nodeCount,
+    edgeCount: graphStore.edgeCount,
+    updatedAt: Date.now()
   })
+  await graphStore.refreshGraphList()
 }
 
 async function refreshFiles() {
