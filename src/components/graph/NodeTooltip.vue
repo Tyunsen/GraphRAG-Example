@@ -1,7 +1,7 @@
 <template>
   <div class="node-tooltip" :style="{ left: x + 'px', top: y + 'px' }">
     <h4>{{ node.label }}</h4>
-    <span class="type-badge" :style="{ background: typeColor }">{{ node.type }}</span>
+    <span class="type-badge" :style="{ background: typeColor }">{{ typeLabel }}</span>
     <div class="prop-row">
       <span class="prop-key">连接数</span>
       <span>{{ degree }}</span>
@@ -20,6 +20,7 @@
 <script setup>
 import { computed } from 'vue'
 import { getColorForType } from '@/utils/colorScale'
+import { formatNodeTypeLabel } from '@/utils/displayText'
 
 const props = defineProps({
   node: { type: Object, required: true },
@@ -29,4 +30,5 @@ const props = defineProps({
 })
 
 const typeColor = computed(() => getColorForType(props.node.type))
+const typeLabel = computed(() => formatNodeTypeLabel(props.node.type))
 </script>

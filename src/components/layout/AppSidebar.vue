@@ -64,8 +64,8 @@ const graphListRef = ref(null)
 const activeSettingsTab = ref('model')
 
 const settingTabs = [
-  { key: 'model', label: '模型', desc: '接口、模型参数、检索' },
-  { key: 'extraction', label: '抽取提示词', desc: '意图抽取与模板' }
+  { key: 'model', label: '模型', desc: '接口、模型参数与检索配置' },
+  { key: 'extraction', label: '抽取提示词', desc: '工作区意图与抽取模板' }
 ]
 </script>
 
@@ -95,7 +95,6 @@ const settingTabs = [
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .sidebar-create {
@@ -177,7 +176,6 @@ const settingTabs = [
 .settings-dialog-kicker {
   font-size: 11px;
   letter-spacing: 0.14em;
-  text-transform: uppercase;
   color: var(--color-text-muted);
 }
 

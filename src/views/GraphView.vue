@@ -76,7 +76,7 @@
               <div class="graph-node-card-kicker">当前节点</div>
               <div class="graph-node-card-title">{{ graphStore.selectedNode.label }}</div>
             </div>
-            <div class="graph-node-card-type">{{ graphStore.selectedNode.type || 'default' }}</div>
+            <div class="graph-node-card-type">{{ formatNodeTypeLabel(graphStore.selectedNode.type) }}</div>
           </div>
 
           <div v-if="nodeExplainLoading" class="graph-node-card-loading">正在加载节点来源...</div>
@@ -84,7 +84,7 @@
           <template v-else-if="nodeExplain">
             <div class="graph-node-card-meta">
               <span>{{ nodeExplain.canonical?.supportCount || 0 }} 份文件支撑</span>
-              <span>{{ nodeExplain.evidence?.length || 0 }} 条 mention</span>
+              <span>{{ nodeExplain.evidence?.length || 0 }} 条来源</span>
             </div>
 
             <div v-if="nodeExplain.canonical?.aliases?.length" class="graph-node-card-group">
@@ -181,6 +181,7 @@ import WorkspaceFilesPanel from '@/components/workspace/WorkspaceFilesPanel.vue'
 import { useGraphStore } from '@/stores/graphStore'
 import { useRagStore } from '@/stores/ragStore'
 import { fetchNodeExplainApi } from '@/services/apiClient'
+import { formatNodeTypeLabel } from '@/utils/displayText'
 
 const graphStore = useGraphStore()
 const ragStore = useRagStore()

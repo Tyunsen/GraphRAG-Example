@@ -31,26 +31,31 @@ const graphStore = useGraphStore()
   backdrop-filter: blur(12px);
   flex-shrink: 0;
 }
+
 .header-left {
   display: flex;
   align-items: center;
   gap: 12px;
   min-width: 0;
 }
+
 .header-title {
   font-size: 16px;
   font-weight: 700;
   flex-shrink: 0;
 }
+
 .header-title a {
   color: var(--color-text);
 }
+
 .header-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
+
 .header-workspace {
   font-size: 12px;
   color: var(--color-text-secondary);
@@ -59,6 +64,7 @@ const graphStore = useGraphStore()
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .header-stats {
   font-size: 12px;
   color: var(--color-text-muted);
