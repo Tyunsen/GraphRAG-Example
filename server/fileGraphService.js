@@ -536,6 +536,25 @@ function includesAny(text = '', candidates = []) {
   })
 }
 
+function hasNearbyTerms(text = '', leftTerms = [], rightTerms = [], windowSize = 24) {
+  const source = String(text || '')
+  for (const left of leftTerms) {
+    const leftValue = String(left || '').trim()
+    if (!leftValue) continue
+    const leftIndex = source.indexOf(leftValue)
+    if (leftIndex === -1) continue
+
+    for (const right of rightTerms) {
+      const rightValue = String(right || '').trim()
+      if (!rightValue) continue
+      const rightIndex = source.indexOf(rightValue)
+      if (rightIndex === -1) continue
+      if (Math.abs(leftIndex - rightIndex) <= windowSize) return true
+    }
+  }
+  return false
+}
+
 function scoreParagraph(paragraph, linkedNodes = [], linkedEvents = [], options = {}) {
   const contentLower = String(paragraph || '').toLowerCase()
   let score = 0
@@ -581,9 +600,20 @@ function scoreParagraph(paragraph, linkedNodes = [], linkedEvents = [], options 
   }
 
   if (queryType === 'fact.person') {
-    const hasPersonNode = linkedNodes.some(label => linkedTypeMap.get(label) === '人物')
-    if (hasPersonNode) score += 6
-    if (includesAny(contentLower, ['领导人', '领袖', '最高领袖', '总统', '总理', '继任', '接班'])) score += 5
+    const roleTerms = ['领导人', '领袖', '最高领袖', '总统', '总理', '继任', '接班']
+    const countryTerms = targetTerms.filter(term => !roleTerms.includes(term))
+    const personLabels = linkedNodes.filter(label => linkedTypeMap.get(label) === '人物')
+    const hasPersonNode = personLabels.length > 0
+    const hasRoleCue = includesAny(contentLower, roleTerms)
+
+    if (hasPersonNode) score += 8
+    else score -= 4
+
+    if (hasRoleCue) score += 5
+    if (hasPersonNode && hasRoleCue) score += 5
+    if (countryTerms.length > 0 && hasNearbyTerms(paragraph, countryTerms, roleTerms, 28)) score += 7
+    if (includesAny(contentLower, ['成为', '接替', '继位', '接任', '出任', '担任', '发表首次声明'])) score += 6
+    if (/地方领导人|市长/.test(paragraph)) score -= 6
   }
 
   if (queryType === 'fact.time') {
