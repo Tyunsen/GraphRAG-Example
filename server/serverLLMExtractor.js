@@ -229,6 +229,29 @@ ${profileLine}
 }`
 }
 
+function buildProtocolGuardPrompt(prompt = '') {
+  const base = String(prompt || '').trim() || getDefaultServerPrompt({})
+  return `${base}
+
+运行时协议约束：
+1. 你的最终输出必须且只能是一个合法 JSON 对象。
+2. JSON 根键只能包含 "nodes" 和 "edges"，禁止输出 entities、relations、events、links、triples、mentions 等其它根键。
+3. 事件节点也必须放在 nodes 中，type 必须是"事件"，不要单独创建 events 数组。
+4. edges 中每一项只能包含 source、target、label、properties，不要使用 from、to、head、tail、predicate 等替代根字段。
+5. 如果文本证据不足，直接返回 {"nodes":[],"edges":[]}，不要解释，不要补充说明。
+6. 不要输出 Markdown、代码块、前后缀说明、自然语言总结或 <think>。
+
+固定返回示例：
+{
+  "nodes": [
+    {"label": "节点名", "type": "人物|组织|地点|设施|国家|概念|经济指标|事件", "properties": {}}
+  ],
+  "edges": [
+    {"source": "节点1", "target": "节点2", "label": "关系", "properties": {}}
+  ]
+}`
+}
+
 export async function extractWithServerLLM(text, options = {}) {
   const baseUrl = (process.env.LLM_API_BASE_URL || 'https://api.minimaxi.com/v1').replace(/\/+$/, '')
   const apiKey = process.env.LLM_API_KEY || ''
@@ -238,7 +261,7 @@ export async function extractWithServerLLM(text, options = {}) {
     throw new Error('LLM_API_KEY is not configured on server.')
   }
 
-  const prompt = options.promptOverride || getDefaultServerPrompt(options)
+  const prompt = buildProtocolGuardPrompt(options.promptOverride || getDefaultServerPrompt(options))
   const payload = {
     model,
     stream: false,

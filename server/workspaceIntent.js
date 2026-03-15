@@ -46,6 +46,9 @@ const DEFAULT_RELATIONS = [
   '矛盾'
 ]
 
+const ALLOWED_ENTITY_TYPES = ['人物', '组织', '地点', '设施', '国家', '概念', '经济指标']
+const ALLOWED_EVENT_TYPES = ['军事打击', '导弹行动', '外交谈判', '制裁施压', '航运风险', '经济波动', '政治变动']
+
 const INCLUDE_PATTERNS = [
   /只看(.+?)相关/,
   /只看(.+?)$/,
@@ -192,6 +195,75 @@ function formatPromptList(values = [], fallback = '无') {
   return items.length > 0 ? items.join('、') : fallback
 }
 
+function sanitizeJson(str) {
+  return String(str || '')
+    .replace(/[\u201c\u201d\u2018\u2019]/g, '"')
+    .replace(/,\s*([}\]])/g, '$1')
+}
+
+function tryParseJson(str) {
+  try {
+    return JSON.parse(str)
+  } catch {
+    return null
+  }
+}
+
+function extractJsonObject(text) {
+  const source = String(text || '')
+  const start = source.indexOf('{')
+  if (start === -1) return null
+
+  let depth = 0
+  let inString = false
+  let escape = false
+  for (let index = start; index < source.length; index++) {
+    const ch = source[index]
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (ch === '\\' && inString) {
+      escape = true
+      continue
+    }
+    if (ch === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (ch === '{') depth += 1
+    if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return source.slice(start, index + 1)
+    }
+  }
+  return null
+}
+
+function normalizeStringArray(values = [], allowed = null, fallback = []) {
+  const items = Array.isArray(values)
+    ? values.map(item => String(item || '').trim()).filter(Boolean)
+    : []
+  const normalized = allowed
+    ? items.filter(item => allowed.includes(item))
+    : items
+  return dedupe(normalized.length > 0 ? normalized : fallback)
+}
+
+function normalizeIntentProfile(candidate = {}, baseProfile = {}) {
+  return {
+    ...baseProfile,
+    focusTopics: normalizeStringArray(candidate.focusTopics, null, baseProfile.focusTopics || []),
+    entityTypes: normalizeStringArray(candidate.entityTypes, ALLOWED_ENTITY_TYPES, baseProfile.entityTypes || []),
+    eventTypes: normalizeStringArray(candidate.eventTypes, ALLOWED_EVENT_TYPES, baseProfile.eventTypes || []),
+    includeKeywords: normalizeStringArray(candidate.includeKeywords, null, baseProfile.includeKeywords || []),
+    excludeKeywords: normalizeStringArray(candidate.excludeKeywords, null, baseProfile.excludeKeywords || []),
+    allowedRelations: normalizeStringArray(candidate.allowedRelations, DEFAULT_RELATIONS, baseProfile.allowedRelations || DEFAULT_RELATIONS),
+    ignoreRules: normalizeStringArray(candidate.ignoreRules, null, baseProfile.ignoreRules || [])
+  }
+}
+
 export function buildExtractionPrompt(intentQuery = '', intentSummary = '', intentProfile = null) {
   const profile = intentProfile || buildIntentProfile(intentQuery, intentSummary)
   const focusTopics = formatPromptList(profile.focusTopics, '围绕工作区意图判断')
@@ -238,59 +310,29 @@ export function buildExtractionPrompt(intentQuery = '', intentSummary = '', inte
 }`
 }
 
-function sanitizeGeneratedPrompt(value = '') {
-  const cleaned = String(value || '')
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/^\s*让我分析[\s\S]*?(?=你是|工作区总意图|抽取要求)/, '')
-    .replace(/```[\s\S]*?```/g, match => match.replace(/```/g, ''))
-    .replace(/^抽取提示词[:：]?\s*/i, '')
-    .trim()
-
-  const anchor = cleaned.indexOf('你是中文知识图谱抽取器')
-  const normalized = anchor >= 0 ? cleaned.slice(anchor) : cleaned
-  return normalized.slice(0, 4000)
-}
-
 function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSummary = '', intentProfile = null }) {
   const profile = intentProfile || buildIntentProfile(intentQuery, intentSummary)
-  const fallbackPrompt = buildExtractionPrompt(intentQuery, intentSummary, profile)
-  const requiredReturnFormat = {
-    nodes: [
-      {
-        label: '节点名',
-        type: '人物|组织|地点|设施|国家|概念|经济指标|事件',
-        properties: {}
-      }
-    ],
-    edges: [
-      {
-        source: '节点1',
-        target: '节点2',
-        label: '关系',
-        properties: {}
-      }
-    ]
-  }
 
   return {
     profile,
-    fallbackPrompt,
     payload: {
       model: process.env.LLM_MODEL_NAME || 'MiniMax-M2.5',
       stream: false,
-      temperature: 0.45,
-      max_tokens: 900,
+      temperature: 0.15,
+      max_tokens: 800,
       messages: [
         {
           role: 'system',
           content: [
-            '你是中文知识图谱抽取设计师。',
-            '请根据工作区名称、工作区意图和抽取范围，直接生成一段可以发给大模型的中文抽取提示词。',
-            '不要套用固定模板，不要逐字复述输入，不要输出 Markdown，不要出现“下面是提示词”，不要输出 <think>。',
-            '提示词需要自然、清晰、可直接使用，但必须明确：抽取范围、重点实体类型、重点事件类型、允许关系、噪音过滤规则、输出 JSON 结构。',
-            '你生成的提示词必须明确要求下游模型只返回 { "nodes": [...], "edges": [...] }，不能改成 entities、relations、events 等其它键名。',
-            '事件节点仍然放在 nodes 中，type 必须是“事件”，关系仍然放在 edges 中。',
-            '输出只保留最终提示词正文。'
+            '你是中文知识图谱抽取策略设计师。',
+            '你的任务不是直接写提示词，而是根据工作区名称和意图，生成一份抽取策略 JSON。',
+            '返回必须是单个合法 JSON 对象，不能输出 Markdown、解释、代码块或 <think>。',
+            'JSON 只能包含以下键：focusTopics、entityTypes、eventTypes、includeKeywords、excludeKeywords、allowedRelations、ignoreRules。',
+            `entityTypes 只能从以下集合中选择：${ALLOWED_ENTITY_TYPES.join('、')}。`,
+            `eventTypes 只能从以下集合中选择：${ALLOWED_EVENT_TYPES.join('、')}。`,
+            `allowedRelations 只能从以下集合中选择：${DEFAULT_RELATIONS.join('、')}。`,
+            '请尽量围绕工作区意图收紧范围，避免泛化词。',
+            '如果某个字段没有必要扩展，可以返回空数组。'
           ].join('')
         },
         {
@@ -299,8 +341,7 @@ function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSumm
             workspaceName: String(name || '').trim(),
             intentQuery: String(intentQuery || '').trim(),
             intentSummary: String(intentSummary || '').trim(),
-            intentProfile: profile,
-            requiredReturnFormat
+            baseProfile: profile
           })
         }
       ]
@@ -310,13 +351,13 @@ function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSumm
 
 export async function generateExtractionPrompt(intentQuery = '', intentSummary = '', options = {}) {
   const name = String(options.name || '').trim()
-  const profile = options.intentProfile || buildIntentProfile(intentQuery, intentSummary)
-  const fallbackPrompt = buildExtractionPrompt(intentQuery, intentSummary, profile)
+  const baseProfile = options.intentProfile || buildIntentProfile(intentQuery, intentSummary)
+  const fallbackPrompt = buildExtractionPrompt(intentQuery, intentSummary, baseProfile)
   const apiKey = process.env.LLM_API_KEY || ''
   if (!apiKey) {
     return {
       extractionPrompt: fallbackPrompt,
-      intentProfile: profile,
+      intentProfile: baseProfile,
       generator: 'template',
       usedFallback: true
     }
@@ -346,21 +387,31 @@ export async function generateExtractionPrompt(intentQuery = '', intentSummary =
     }
 
     const data = JSON.parse(rawText)
-    const content = sanitizeGeneratedPrompt(data?.choices?.[0]?.message?.content || '')
-    if (!content) {
-      throw new Error('empty prompt from llm')
+    const content = String(data?.choices?.[0]?.message?.content || '').trim()
+    const extracted = extractJsonObject(content) || content
+    const parsed = tryParseJson(sanitizeJson(extracted))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('invalid profile from llm')
     }
+    const mergedProfile = normalizeIntentProfile(parsed, baseProfile)
 
     return {
-      extractionPrompt: content,
-      intentProfile: profile,
+      extractionPrompt: buildExtractionPrompt(intentQuery, intentSummary, mergedProfile),
+      intentProfile: {
+        ...mergedProfile,
+        includeKeywordAliases: expandKeywords(mergedProfile.includeKeywords),
+        excludeKeywordAliases: expandKeywords(mergedProfile.excludeKeywords),
+        extractionMode: mergedProfile.eventTypes.length > 0 ? 'event-centric' : 'entity-centric',
+        qaStyle: 'evidence-first',
+        generatedAt: Date.now()
+      },
       generator: 'llm',
       usedFallback: false
     }
   } catch {
     return {
       extractionPrompt: fallbackPrompt,
-      intentProfile: profile,
+      intentProfile: baseProfile,
       generator: 'template',
       usedFallback: true
     }
