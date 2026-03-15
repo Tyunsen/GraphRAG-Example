@@ -123,6 +123,7 @@ const editingId = ref(null)
 const generatingPrompt = ref(false)
 const saving = ref(false)
 const promptSourceIntent = ref('')
+const promptGenerated = ref(false)
 const form = reactive({
   name: '',
   intentQuery: '',
@@ -133,7 +134,11 @@ const workspaceList = computed(() => graphStore.savedGraphs)
 const canSubmitWorkspace = computed(() => {
   const intentQuery = form.intentQuery.trim()
   const extractionPrompt = form.extractionPrompt.trim()
-  return Boolean(intentQuery && extractionPrompt && promptSourceIntent.value === intentQuery && !saving.value && !generatingPrompt.value)
+  if (!intentQuery || !extractionPrompt || promptSourceIntent.value !== intentQuery || saving.value || generatingPrompt.value) {
+    return false
+  }
+  if (editingId.value) return true
+  return promptGenerated.value
 })
 
 function resetForm() {
@@ -141,6 +146,7 @@ function resetForm() {
   form.intentQuery = ''
   form.extractionPrompt = ''
   promptSourceIntent.value = ''
+  promptGenerated.value = false
 }
 
 function getWorkspaceNameFromIntent(intentQuery = '') {
@@ -167,6 +173,7 @@ function openEditPanel(workspace) {
   form.intentQuery = workspace.intentQuery || ''
   form.extractionPrompt = workspace.extractionPrompt || ''
   promptSourceIntent.value = form.extractionPrompt.trim() ? form.intentQuery.trim() : ''
+  promptGenerated.value = Boolean(form.extractionPrompt.trim())
 }
 
 function closePanel() {
@@ -189,6 +196,7 @@ async function generatePrompt() {
     })
     form.extractionPrompt = response?.extractionPrompt || ''
     promptSourceIntent.value = form.extractionPrompt.trim() ? intentQuery : ''
+    promptGenerated.value = Boolean(form.extractionPrompt.trim())
   } finally {
     generatingPrompt.value = false
   }
@@ -197,10 +205,12 @@ async function generatePrompt() {
 function onIntentInput() {
   if (!form.extractionPrompt.trim()) {
     promptSourceIntent.value = ''
+    promptGenerated.value = false
     return
   }
   if (promptSourceIntent.value !== form.intentQuery.trim()) {
     promptSourceIntent.value = ''
+    promptGenerated.value = false
   }
 }
 
