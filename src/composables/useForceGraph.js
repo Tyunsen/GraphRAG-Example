@@ -46,7 +46,7 @@ export function useForceGraph(graphStore) {
       .on('click.background', (event) => {
         // Only fire if the click target is the SVG itself
         if (event.target === svgEl) {
-          graphStore.selectedNode = null
+          graphStore.setSelectedNode(null)
           graphStore.clearHighlights()
         }
       })
@@ -167,7 +167,7 @@ export function useForceGraph(graphStore) {
       })
       .on('click', (event, d) => {
         event.stopPropagation()
-        graphStore.selectedNode = graphStore.selectedNode?.id === d.id ? null : d
+        graphStore.setSelectedNode(graphStore.selectedNode?.id === d.id ? null : d.id)
       })
   }
 

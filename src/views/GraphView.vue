@@ -233,19 +233,15 @@ function parseEventLabel(label = '') {
 function formatEventSvo(canonical) {
   if (!canonical) return ''
   const parsed = parseEventLabel(canonical.label || canonical.summary || '')
-  const parsedIsUsable = Boolean(parsed.subject && parsed.predicate)
+  const roleSubject = formatRoleKeys(canonical.subjectKeys || [])
+  const roleObject = formatRoleKeys(canonical.objectKeys || [])
   const predicate = (() => {
     const raw = String(canonical.predicateText || '').trim()
-    if (parsedIsUsable) return parsed.predicate
     if (raw && raw !== canonical.label) return raw
     return parsed.predicate || String(canonical.trigger || canonical.label || '相关').trim()
   })()
-  const subject = parsedIsUsable
-    ? parsed.subject
-    : (formatRoleKeys(canonical.subjectKeys || []) || parsed.subject || '未知主体')
-  const object = parsedIsUsable
-    ? (parsed.object || '未知客体')
-    : (formatRoleKeys(canonical.objectKeys || []) || parsed.object || '未知客体')
+  const subject = roleSubject || parsed.subject || '未知主体'
+  const object = roleObject || parsed.object || '未知客体'
   return `${subject} -> ${predicate} -> ${object}`
 }
 
