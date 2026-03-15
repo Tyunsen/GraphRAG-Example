@@ -35,13 +35,41 @@ function hasUsableEvidence(evidence = [], subgraph = { nodes: [] }) {
   return subgraph.nodes.length > 0 && topScore >= 6
 }
 
+function expandGraphNeighborhoodCandidates(graphStore, candidateNodes = [], queryPlan = null) {
+  if (!queryPlan || candidateNodes.length === 0) return []
+
+  const seedIds = candidateNodes.map(node => node.id).filter(Boolean)
+  if (seedIds.length === 0) return []
+
+  const preferredTypes = new Set((queryPlan.expectedNodeTypes || []).map(type => String(type || '').trim()))
+  const subgraph = graphStore.bfsSubgraph(
+    seedIds,
+    queryPlan.retrievalMode === 'fact' ? 1 : 2,
+    24
+  )
+
+  return (subgraph.nodes || [])
+    .filter(node => isDisplayableGraphLabel(node.label))
+    .filter(node => !seedIds.includes(node.id))
+    .filter(node => {
+      if (preferredTypes.size === 0) return true
+      if (preferredTypes.has(node.type)) return true
+      return queryPlan.retrievalMode !== 'fact' && node.type === '事件'
+    })
+    .slice(0, 8)
+}
+
 export async function retrieveContext(graphStore, query, settings) {
   const queryPlan = buildQueryPlan(query)
   if (queryPlan.expandedTerms.length === 0) return null
 
   const graphId = graphStore.currentGraphId
   const candidateNodes = findGraphCandidatesByPlan(graphStore, queryPlan, 12)
-  const graphCandidateLabels = candidateNodes.map(node => node.label)
+  const neighborhoodCandidates = expandGraphNeighborhoodCandidates(graphStore, candidateNodes, queryPlan)
+  const graphCandidateLabels = dedupe([
+    ...candidateNodes.map(node => node.label),
+    ...neighborhoodCandidates.map(node => node.label)
+  ]).slice(0, 16)
   let evidence = []
   if (graphId) {
     try {
