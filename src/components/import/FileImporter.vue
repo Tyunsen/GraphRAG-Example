@@ -5,7 +5,6 @@
     @dragover.prevent="onDragOver"
     @dragleave="isDragging = false"
     @drop.prevent="onDrop"
-    @click="openFileDialog"
   >
     <input
       ref="fileInput"
@@ -13,7 +12,8 @@
       multiple
       accept=".json,.csv,.txt,.md,.markdown,.pdf"
       @change="onFileSelect"
-      style="display: none"
+      class="file-input-overlay"
+      :disabled="disabled"
     />
 
     <div class="file-importer-content">
@@ -37,11 +37,6 @@ const emit = defineEmits(['files-selected'])
 
 const isDragging = ref(false)
 const fileInput = ref(null)
-
-function openFileDialog() {
-  if (props.disabled) return
-  fileInput.value?.click()
-}
 
 function onDragOver() {
   if (props.disabled) return
@@ -67,6 +62,7 @@ function onFileSelect(event) {
 
 <style scoped>
 .file-importer {
+  position: relative;
   border: 1px dashed rgba(79, 109, 245, 0.28);
   border-radius: 16px;
   padding: 18px;
@@ -89,9 +85,19 @@ function onFileSelect(event) {
 }
 
 .file-importer-content {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  pointer-events: none;
+}
+
+.file-input-overlay {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .file-importer-title {
@@ -109,5 +115,9 @@ function onFileSelect(event) {
 .file-importer-meta {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+
+.file-importer.disabled .file-input-overlay {
+  display: none;
 }
 </style>

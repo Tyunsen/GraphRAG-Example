@@ -73,6 +73,7 @@
                 v-model="form.intentQuery"
                 class="input workspace-intent"
                 placeholder="例如：只看中国相关的表态、行动与影响"
+                @input="onIntentInput"
               />
             </section>
 
@@ -93,13 +94,14 @@
                 v-model="form.extractionPrompt"
                 class="input workspace-prompt"
                 placeholder="这里会显示当前工作区的抽取提示词。"
+                @input="onPromptInput"
               />
             </section>
           </div>
 
           <div class="workspace-actions">
             <button class="btn btn-secondary" @click="closePanel">取消</button>
-            <button class="btn btn-primary" :disabled="!form.intentQuery.trim() || saving" @click="submitPanel">
+            <button class="btn btn-primary" :disabled="!canSubmitWorkspace" @click="submitPanel">
               {{ saving ? '保存中...' : editingId ? '保存工作区' : '创建工作区' }}
             </button>
           </div>
@@ -120,6 +122,7 @@ const creating = ref(false)
 const editingId = ref(null)
 const generatingPrompt = ref(false)
 const saving = ref(false)
+const promptSourceIntent = ref('')
 const form = reactive({
   name: '',
   intentQuery: '',
@@ -127,11 +130,17 @@ const form = reactive({
 })
 
 const workspaceList = computed(() => graphStore.savedGraphs)
+const canSubmitWorkspace = computed(() => {
+  const intentQuery = form.intentQuery.trim()
+  const extractionPrompt = form.extractionPrompt.trim()
+  return Boolean(intentQuery && extractionPrompt && promptSourceIntent.value === intentQuery && !saving.value && !generatingPrompt.value)
+})
 
 function resetForm() {
   form.name = ''
   form.intentQuery = ''
   form.extractionPrompt = ''
+  promptSourceIntent.value = ''
 }
 
 function getWorkspaceNameFromIntent(intentQuery = '') {
@@ -157,6 +166,7 @@ function openEditPanel(workspace) {
   form.name = workspace.name || ''
   form.intentQuery = workspace.intentQuery || ''
   form.extractionPrompt = workspace.extractionPrompt || ''
+  promptSourceIntent.value = form.extractionPrompt.trim() ? form.intentQuery.trim() : ''
 }
 
 function closePanel() {
@@ -178,9 +188,24 @@ async function generatePrompt() {
       intentQuery
     })
     form.extractionPrompt = response?.extractionPrompt || ''
+    promptSourceIntent.value = form.extractionPrompt.trim() ? intentQuery : ''
   } finally {
     generatingPrompt.value = false
   }
+}
+
+function onIntentInput() {
+  if (!form.extractionPrompt.trim()) {
+    promptSourceIntent.value = ''
+    return
+  }
+  if (promptSourceIntent.value !== form.intentQuery.trim()) {
+    promptSourceIntent.value = ''
+  }
+}
+
+function onPromptInput() {
+  promptSourceIntent.value = form.extractionPrompt.trim() ? form.intentQuery.trim() : ''
 }
 
 async function submitPanel() {
