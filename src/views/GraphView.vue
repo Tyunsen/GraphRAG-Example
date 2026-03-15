@@ -250,12 +250,14 @@ function formatEventSvo(canonical) {
   const parsed = parseEventLabel(canonical.label || canonical.summary || '')
   const predicateRaw = String(canonical.predicateText || '').trim()
   const eventTypeRaw = String(canonical.eventType || '').trim()
-  const roleSubject = formatRoleLabels(canonical.subjectKeys || []).join('、')
-  const roleObject = formatRoleLabels(canonical.objectKeys || [])
+  const roleSubjectRaw = formatRoleLabels(canonical.subjectKeys || []).join('、')
+  const roleObjectRaw = formatRoleLabels(canonical.objectKeys || [])
     .filter(item => item !== eventTypeRaw)
     .filter(item => item !== predicateRaw)
     .filter(item => !predicateRaw || !item.endsWith(predicateRaw))
     .join('、')
+  const roleSubject = roleSubjectRaw && !(parsed.subject && roleSubjectRaw.includes('对')) ? roleSubjectRaw : ''
+  const roleObject = roleObjectRaw && !(parsed.object && roleObjectRaw.includes(predicateRaw)) ? roleObjectRaw : ''
   const predicate = (() => {
     if (predicateRaw && predicateRaw !== canonical.label) return predicateRaw
     return parsed.predicate || String(canonical.trigger || canonical.label || '相关').trim()
