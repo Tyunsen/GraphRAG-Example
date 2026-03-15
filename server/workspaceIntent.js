@@ -255,17 +255,17 @@ function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSumm
     payload: {
       model: process.env.LLM_MODEL_NAME || 'MiniMax-M2.5',
       stream: false,
-      temperature: 0.2,
+      temperature: 0.45,
       max_tokens: 900,
       messages: [
         {
           role: 'system',
           content: [
-            '你是一名中文知识图谱抽取架构师。',
+            '你是中文知识图谱抽取设计师。',
             '请根据工作区名称、工作区意图和抽取范围，直接生成一段可以发给大模型的中文抽取提示词。',
-            '要求这段提示词明确：抽取范围、关注实体类型、关注事件类型、允许关系、过滤噪音规则、输出 JSON 结构。',
-            '不要解释原理，不要输出 Markdown，不要出现“下面是提示词”，不要输出 <think>。',
-            '输出必须是最终可直接使用的提示词正文。'
+            '不要套用固定模板，不要逐字复述输入，不要输出 Markdown，不要出现“下面是提示词”，不要输出 <think>。',
+            '提示词需要自然、清晰、可直接使用，但必须明确：抽取范围、重点实体类型、重点事件类型、允许关系、噪音过滤规则、输出 JSON 结构。',
+            '输出只保留最终提示词正文。'
           ].join('')
         },
         {
@@ -274,8 +274,7 @@ function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSumm
             workspaceName: String(name || '').trim(),
             intentQuery: String(intentQuery || '').trim(),
             intentSummary: String(intentSummary || '').trim(),
-            intentProfile: profile,
-            fallbackPrompt
+            intentProfile: profile
           })
         }
       ]

@@ -4,6 +4,7 @@ import { useGraphStore } from './graphStore'
 import { useSettingsStore } from './settingsStore'
 import { parseJSON } from '@/services/parsers/jsonParser'
 import { parseCSV } from '@/services/parsers/csvParser'
+import { extractCSVText, extractJSONText } from '@/services/parsers/structuredTextExtractor'
 import { createImportJobApi, fetchImportJobApi, retryImportJobApi } from '@/services/apiClient'
 import { generateId } from '@/utils/idGenerator'
 
@@ -217,6 +218,11 @@ export const useImportStore = defineStore('import', () => {
 
     if (!hasGraphContent(precomputedGraph)) {
       precomputedGraph = null
+    }
+
+    if (!precomputedGraph) {
+      if (ext === 'json') content = extractJSONText(content)
+      else if (ext === 'csv') content = extractCSVText(content)
     }
 
     return {
