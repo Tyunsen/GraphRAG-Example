@@ -368,7 +368,7 @@ export async function generateExtractionPrompt(intentQuery = '', intentSummary =
     name,
     intentQuery,
     intentSummary,
-    intentProfile: profile
+    intentProfile: baseProfile
   })
 
   try {
