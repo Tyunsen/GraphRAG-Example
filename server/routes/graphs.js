@@ -116,6 +116,27 @@ function clearWorkspaceGraphData(graphId) {
   run('UPDATE graphs SET nodeCount = 0, edgeCount = 0, updatedAt = ? WHERE id = ?', [Date.now(), graphId])
 }
 
+function pruneUnsupportedEventMentions(graphId) {
+  const unsupported = allRows(
+    `
+    SELECT id
+    FROM event_mentions
+    WHERE graphId = ?
+    `,
+    [graphId]
+  ).filter(row => {
+    const mention = getRow('SELECT paragraphRefs FROM event_mentions WHERE id = ?', [row.id])
+    const refs = parseJsonArray(mention?.paragraphRefs)
+    return refs.length === 0
+  })
+
+  if (unsupported.length === 0) return false
+  for (const row of unsupported) {
+    run('DELETE FROM event_mentions WHERE id = ?', [row.id])
+  }
+  return true
+}
+
 function reconcileWorkspaceSourceState(graphId) {
   const fileCount = Number(getRow('SELECT COUNT(*) AS count FROM files WHERE graphId = ?', [graphId])?.count || 0)
   if (fileCount > 0) return false
@@ -168,7 +189,10 @@ async function repairWorkspaceKnowledgeState(graphId) {
   const nodeCount = Number(snapshot.nodeCount || 0)
   const edgeCount = Number(snapshot.edgeCount || 0)
 
+  const removedUnsupportedEvents = pruneUnsupportedEventMentions(graphId)
+
   const needsRepair =
+    removedUnsupportedEvents ||
     canonicalCount === 0 ||
     (nodeCount === 0 && edgeCount === 0) ||
     (canonicalCount > 0 && nodeCount === 0)

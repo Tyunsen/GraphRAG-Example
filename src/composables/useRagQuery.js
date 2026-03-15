@@ -97,7 +97,7 @@ export function useRagQuery() {
   }
 
   async function askQuestion(query) {
-    if (!query.trim()) return
+    if (!query.trim() || !ragStore.currentSessionId) return
 
     await ragStore.addMessage('user', query)
     ragStore.setLoading(true)

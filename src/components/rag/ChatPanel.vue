@@ -28,15 +28,15 @@
           class="input chat-input"
           v-model="inputText"
           rows="1"
-          placeholder="输入问题，例如：油价为什么上升了？"
+          :placeholder="inputPlaceholder"
           @input="resizeInput"
           @keydown.enter.exact.prevent="sendMessage"
-          :disabled="ragStore.isLoading || !graphStore.currentGraphId"
+          :disabled="ragStore.isLoading || !canSendMessage"
         ></textarea>
         <button
           class="btn btn-primary send-btn"
           @click="sendMessage"
-          :disabled="!inputText.trim() || ragStore.isLoading"
+          :disabled="!inputText.trim() || ragStore.isLoading || !canSendMessage"
         >
           发送
         </button>
@@ -61,6 +61,12 @@ const { askQuestion } = useRagQuery()
 const inputText = ref('')
 const inputRef = ref(null)
 const messagesRef = ref(null)
+const canSendMessage = computed(() => Boolean(graphStore.currentGraphId && ragStore.currentSessionId))
+const inputPlaceholder = computed(() => {
+  if (!graphStore.currentGraphId) return '先选择工作区'
+  if (!ragStore.currentSessionId) return '先新建对话，再开始提问'
+  return '输入问题，例如：油价为什么上升了？'
+})
 
 const displayTitle = computed(() => {
   const title = ragStore.currentSession?.title?.trim()
@@ -77,7 +83,7 @@ function resizeInput() {
 
 async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text || ragStore.isLoading) return
+  if (!text || ragStore.isLoading || !canSendMessage.value) return
   inputText.value = ''
   resizeInput()
   await askQuestion(text)

@@ -15,7 +15,7 @@
           @click.stop="emit('focus-evidence', item)"
         >
           <div class="evidence-meta">{{ item.fileName }} 第 {{ item.paragraphIndex }} 段</div>
-          <div class="evidence-text">{{ item.text }}</div>
+          <div class="evidence-text" :title="item.text">{{ truncateText(item.text) }}</div>
           <div class="evidence-tags">
             <span
               v-for="label in filterDisplayableLabels(item.linkedNodes || [])"
@@ -48,6 +48,12 @@ defineProps({
 
 const emit = defineEmits(['focus-evidence'])
 const expanded = ref(false)
+
+function truncateText(value = '', limit = 180) {
+  const text = String(value || '').trim()
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit)}...`
+}
 </script>
 
 <style scoped>

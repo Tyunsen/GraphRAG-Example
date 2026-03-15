@@ -270,6 +270,23 @@ watch(
   }
 )
 
+watch(
+  () => unifiedFiles.value.map(item => `${item.rowKey}:${item.state}`).join('|'),
+  () => {
+    const current = selectedItem.value
+    if (!current) return
+    if (current.fileId) return
+    const replacement = unifiedFiles.value.find(item =>
+      item.fileId &&
+      item.fileName === current.fileName &&
+      item.state !== 'running'
+    )
+    if (replacement) {
+      selectedRowKey.value = replacement.rowKey
+    }
+  }
+)
+
 async function onFilesSelected(files) {
   const selectedFiles = Array.from(files || [])
   if (selectedFiles.length === 0) return

@@ -418,7 +418,7 @@ export function getFileDetail(fileId) {
   const file = getRow('SELECT * FROM files WHERE id = ?', [fileId])
   if (!file) return null
 
-  const chunks = allRows(
+  let chunks = allRows(
     `
     SELECT id, paragraphIndex, content, linkedNodes, linkedEvents
     FROM file_chunks
@@ -431,6 +431,16 @@ export function getFileDetail(fileId) {
     linkedNodes: parseJson(chunk.linkedNodes, []),
     linkedEvents: parseJson(chunk.linkedEvents, [])
   }))
+
+  if (chunks.length === 0) {
+    chunks = splitIntoParagraphs(file.content || '').map((content, index) => ({
+      id: `${fileId}_fallback_${index + 1}`,
+      paragraphIndex: index + 1,
+      content,
+      linkedNodes: [],
+      linkedEvents: []
+    }))
+  }
 
   return { ...file, chunks }
 }

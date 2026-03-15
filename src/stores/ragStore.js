@@ -156,8 +156,7 @@ export const useRagStore = defineStore('rag', () => {
   }
 
   async function ensureActiveSession() {
-    if (currentSessionId.value) return currentSessionId.value
-    return createSession('新对话')
+    return currentSessionId.value || null
   }
 
   async function switchSession(sessionId) {
