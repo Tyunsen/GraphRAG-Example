@@ -608,6 +608,109 @@ function isWeakEventLabel(label = '', subjectKeys = [], objectKeys = [], propert
   return false
 }
 
+const EVENT_ROLE_PREDICATES = [
+  '持续打击', '联合打击', '发动打击', '直接打击', '编制实施', '施压', '发起', '发动', '宣布', '推动',
+  '打击', '空袭', '轰炸', '封锁', '威胁', '拦截', '发射', '报复', '回应', '谈判', '会谈', '停火',
+  '升级', '影响', '支持', '反对', '制裁', '袭击'
+].sort((a, b) => b.length - a.length)
+
+const EVENT_SUBJECT_TRAILING_TERMS = [
+  '表示', '称', '指出', '强调', '宣布', '提出', '要求', '决定', '认为', '计划', '准备', '试图'
+]
+
+const EVENT_OBJECT_STOP_TERMS = ['，', '。', '；', '：', '、', '并', '且', '并且', '但', '但是', '使', '令', '致使', '是', '为']
+
+function trimRoleLabel(value = '') {
+  return String(value || '')
+    .replace(/^[“"'‘’《》【】（）()、，。；：\s]+/, '')
+    .replace(/[“"'‘’《》【】（）()、，。；：\s]+$/, '')
+    .trim()
+}
+
+function finalizeRoleLabel(value = '') {
+  return sanitizeGraphLabel(trimRoleLabel(value), '')
+}
+
+function cleanDerivedSubject(value = '') {
+  let text = trimRoleLabel(value)
+  for (const term of EVENT_SUBJECT_TRAILING_TERMS) {
+    if (text.endsWith(term) && text.length > term.length + 1) {
+      text = text.slice(0, -term.length)
+      break
+    }
+  }
+  return finalizeRoleLabel(text)
+}
+
+function cleanDerivedObject(value = '') {
+  let text = trimRoleLabel(value)
+  for (const term of EVENT_OBJECT_STOP_TERMS) {
+    const index = text.indexOf(term)
+    if (index > 0) {
+      text = text.slice(0, index)
+      break
+    }
+  }
+  text = text.replace(/^(对|向|于|将|把|给|令)\s*/, '')
+  return finalizeRoleLabel(text)
+}
+
+function findEventTupleInText(text = '', preferredPredicate = '') {
+  const source = String(text || '').trim()
+  if (!source) return null
+
+  const predicates = dedupe([preferredPredicate, ...EVENT_ROLE_PREDICATES].filter(Boolean))
+  for (const predicate of predicates) {
+    const index = source.indexOf(predicate)
+    if (index <= 0) continue
+
+    const subject = cleanDerivedSubject(source.slice(0, index))
+    const object = cleanDerivedObject(source.slice(index + predicate.length))
+    if (!subject || !object) continue
+
+    return {
+      subject,
+      predicate,
+      object
+    }
+  }
+
+  return null
+}
+
+function deriveEventTuple(label = '', properties = {}) {
+  const summary = String(properties.summary || '').trim()
+  const predicate = String(properties.predicate || properties.trigger || '').trim()
+  const candidates = [summary, label].filter(Boolean)
+
+  for (const candidate of candidates) {
+    const tuple = findEventTupleInText(candidate, predicate)
+    if (tuple) return tuple
+  }
+
+  return null
+}
+
+function findParagraphRefsByTerms(paragraphs = [], terms = [], fallback = []) {
+  const refs = []
+  const normalizedTerms = dedupe(
+    terms
+      .map(item => String(item || '').trim())
+      .filter(item => item.length >= 2)
+  )
+
+  if (normalizedTerms.length === 0) return uniqueIntegers(fallback)
+
+  for (let index = 0; index < paragraphs.length; index++) {
+    const paragraph = paragraphs[index]
+    if (normalizedTerms.some(term => paragraph.includes(term))) {
+      refs.push(index + 1)
+    }
+  }
+
+  return uniqueIntegers(refs.length > 0 ? refs : fallback)
+}
+
 function coerceStringArray(value) {
   if (Array.isArray(value)) {
     return value.map(item => String(item || '').trim()).filter(Boolean)
@@ -647,6 +750,13 @@ function buildPreparedNodes(extractedNodes = [], extractedEdges = []) {
   for (const node of [...nodeMap.values()]) {
     if (node.type !== EVENT_NODE_TYPE) continue
     const properties = node.properties || {}
+    const derivedTuple = deriveEventTuple(node.label, properties)
+    if (derivedTuple) {
+      properties.subject = dedupe([...coerceStringArray(properties.subject), derivedTuple.subject])
+      properties.object = dedupe([...coerceStringArray(properties.object), derivedTuple.object])
+      properties.predicate = String(properties.predicate || derivedTuple.predicate).trim()
+      node.properties = properties
+    }
 
     for (const label of [
       ...coerceStringArray(properties.subject),
@@ -810,13 +920,16 @@ export function buildKnowledgeRecords(
     if (!label) continue
 
     const nodeType = normalizeNodeType(node.type)
-    const paragraphRefs = findParagraphRefs(paragraphs, label, [])
-    const chunkId = findSegmentIdForParagraphRefs(segments, paragraphRefs)
-    paragraphRefsByNode.set(label, paragraphRefs)
     if (nodeType === EVENT_NODE_TYPE) {
       const inbound = relationIndex.inbound.get(label) || []
       const outbound = relationIndex.outbound.get(label) || []
       const properties = isObject(node.properties) ? node.properties : {}
+      const derivedTuple = deriveEventTuple(label, properties)
+      if (derivedTuple) {
+        properties.subject = dedupe([...coerceStringArray(properties.subject), derivedTuple.subject])
+        properties.object = dedupe([...coerceStringArray(properties.object), derivedTuple.object])
+        properties.predicate = String(properties.predicate || derivedTuple.predicate).trim()
+      }
 
       const subjectKeys = dedupe([
         ...inbound
@@ -857,7 +970,19 @@ export function buildKnowledgeRecords(
         ''
       ).trim()
       const summary = String(properties.summary || label).trim()
+      const paragraphRefs = findParagraphRefsByTerms(paragraphs, [
+        label,
+        summary,
+        trigger,
+        predicateText,
+        ...coerceStringArray(properties.subject),
+        ...coerceStringArray(properties.object)
+      ], [])
+      const chunkId = findSegmentIdForParagraphRefs(segments, paragraphRefs)
+      paragraphRefsByNode.set(label, paragraphRefs)
+
       if (isWeakEventLabel(label, subjectKeys, objectKeys, properties)) continue
+      if (subjectKeys.length === 0 || objectKeys.length === 0) continue
       const canonicalKey = canonicalizeEventKey({
         label,
         eventType,
@@ -911,6 +1036,9 @@ export function buildKnowledgeRecords(
       continue
     }
 
+    const paragraphRefs = findParagraphRefs(paragraphs, label, [])
+    const chunkId = findSegmentIdForParagraphRefs(segments, paragraphRefs)
+    paragraphRefsByNode.set(label, paragraphRefs)
     const properties = isObject(node.properties) ? node.properties : {}
     const canonicalKey = canonicalizeEntityKey(label, nodeType, properties)
     nodeKeyByLabel.set(label, canonicalKey)
