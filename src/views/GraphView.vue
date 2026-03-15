@@ -213,6 +213,15 @@ function parseEventLabel(label = '') {
   const text = String(label || '').trim()
   if (!text) return { subject: '', predicate: '', object: '' }
 
+  const directionalMatch = text.match(/^(.{1,20}?)对(.{1,24}?)(?:发动|发起|实施|进行)?(?:军事)?(打击|空袭|袭击|施压|封锁|报复|回应)$/)
+  if (directionalMatch) {
+    return {
+      subject: directionalMatch[1].trim(),
+      object: directionalMatch[2].trim(),
+      predicate: directionalMatch[3].trim()
+    }
+  }
+
   const predicates = [
     '持续打击', '发动打击', '联合打击', '直接打击', '空袭', '袭击', '打击',
     '施压', '封锁', '威胁封锁', '拦截', '发射', '报复', '回应', '谈判', '停火',
