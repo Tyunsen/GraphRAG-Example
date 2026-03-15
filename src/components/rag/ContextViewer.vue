@@ -7,15 +7,28 @@
 
     <div v-if="expanded" class="context-body">
       <div v-if="context.evidence?.length" class="evidence-list">
-        <button
+        <div
           v-for="item in context.evidence"
           :key="item.chunkId"
-          type="button"
           class="evidence-item"
-          @click.stop="emit('focus-evidence', item)"
         >
-          <div class="evidence-meta">{{ item.fileName }} 第 {{ item.paragraphIndex }} 段</div>
-          <div class="evidence-text" :title="item.text">{{ truncateText(item.text) }}</div>
+          <div class="evidence-row">
+            <button
+              type="button"
+              class="evidence-main"
+              @click.stop="emit('focus-evidence', item)"
+            >
+              <div class="evidence-meta">{{ item.fileName }} 第 {{ item.paragraphIndex }} 段</div>
+              <div class="evidence-text" :title="item.text">{{ truncateText(item.text) }}</div>
+            </button>
+            <button
+              type="button"
+              class="evidence-preview-btn"
+              @click.stop="emit('preview-evidence', item)"
+            >
+              查看原文
+            </button>
+          </div>
           <div class="evidence-tags">
             <span
               v-for="label in filterDisplayableLabels(item.linkedNodes || [])"
@@ -32,7 +45,7 @@
               {{ label }}
             </span>
           </div>
-        </button>
+        </div>
       </div>
     </div>
   </div>
@@ -46,7 +59,7 @@ defineProps({
   context: { type: Object, default: null }
 })
 
-const emit = defineEmits(['focus-evidence'])
+const emit = defineEmits(['focus-evidence', 'preview-evidence'])
 const expanded = ref(false)
 
 function truncateText(value = '', limit = 120) {
@@ -94,25 +107,59 @@ function truncateText(value = '', limit = 120) {
 }
 
 .evidence-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   width: 100%;
   padding: 8px;
-  text-align: left;
-  cursor: pointer;
   border-radius: var(--radius-md);
   background: var(--color-bg-card);
   border: 1px solid var(--color-border-light);
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .evidence-item:hover {
   background: var(--color-bg-hover);
   border-color: rgba(79, 109, 245, 0.28);
-  transform: translateY(-1px);
 }
 
-.evidence-item:focus-visible {
+.evidence-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.evidence-main {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+
+.evidence-main:focus-visible,
+.evidence-preview-btn:focus-visible {
   outline: 2px solid rgba(79, 109, 245, 0.42);
   outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.evidence-preview-btn {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-primary);
+  background: rgba(79, 109, 245, 0.08);
+  border: 1px solid rgba(79, 109, 245, 0.18);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.evidence-preview-btn:hover {
+  background: rgba(79, 109, 245, 0.14);
 }
 
 .evidence-meta {

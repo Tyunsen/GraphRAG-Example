@@ -93,3 +93,64 @@ export function findSeedNodes(graphStore, keywords, maxSeeds = 10) {
     .slice(0, maxSeeds)
     .map(([id]) => id)
 }
+
+function collectNodeSearchText(node) {
+  const properties = node.properties || {}
+  const aliases = Array.isArray(properties.aliases) ? properties.aliases : []
+
+  return [
+    node.label,
+    node.type,
+    properties.alias,
+    properties.name,
+    properties.summary,
+    properties.trigger,
+    properties.predicate,
+    properties.predicateText,
+    ...aliases
+  ]
+    .map(item => String(item || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ')
+}
+
+export function findGraphCandidatesByPlan(graphStore, queryPlan, maxCandidates = 12) {
+  if (!queryPlan) return []
+
+  const expectedTypes = new Set((queryPlan.expectedNodeTypes || []).map(type => String(type || '').trim()))
+  const targetTerms = (queryPlan.targetTerms || []).map(term => String(term || '').trim().toLowerCase()).filter(Boolean)
+  const expandedTerms = (queryPlan.expandedTerms || []).map(term => String(term || '').trim().toLowerCase()).filter(Boolean)
+  const scored = []
+
+  for (const node of graphStore.nodes.values()) {
+    if (!isDisplayableGraphLabel(node.label)) continue
+
+    const label = String(node.label || '').trim().toLowerCase()
+    const searchText = collectNodeSearchText(node)
+    let score = 0
+
+    for (const term of targetTerms) {
+      if (label === term) score += 14
+      else if (label.includes(term) || term.includes(label)) score += 9
+      else if (searchText.includes(term)) score += 5
+    }
+
+    for (const term of expandedTerms) {
+      if (targetTerms.includes(term)) continue
+      if (label.includes(term) || searchText.includes(term)) score += 2
+    }
+
+    if (expectedTypes.has(node.type)) score += 4
+    if (queryPlan.retrievalMode === 'path' && node.type === '事件') score += 2
+    if (queryPlan.retrievalMode === 'overview' && node.type === '事件') score += 3
+
+    if (score > 0) {
+      scored.push({ node, score })
+    }
+  }
+
+  return scored
+    .sort((left, right) => right.score - left.score || left.node.label.length - right.node.label.length)
+    .slice(0, maxCandidates)
+    .map(item => item.node)
+}

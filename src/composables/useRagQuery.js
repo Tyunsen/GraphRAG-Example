@@ -107,10 +107,11 @@ export function useRagQuery() {
       ragStore.setLastContext(context)
 
       if (!context) {
-        const assistantMessage = await ragStore.addMessage('assistant', '现有图谱和文档里没有找到与这个问题直接相关的证据。')
+        const emptyAnswer = '现有证据不足以回答。当前未检索到有效证据段落，图谱命中 0 个节点。'
+        const assistantMessage = await ragStore.addMessage('assistant', emptyAnswer)
         await refreshSessionTitle(ragStore.currentSession, [
           { role: 'user', content: query },
-          { role: 'assistant', content: '现有图谱和文档里没有找到与这个问题直接相关的证据。' }
+          { role: 'assistant', content: emptyAnswer }
         ])
         if (assistantMessage?.id) {
           ragStore.selectMessage(assistantMessage.id)

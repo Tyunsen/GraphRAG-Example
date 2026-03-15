@@ -13,6 +13,7 @@
           :active="ragStore.activeMessageId === msg.id"
           @select="ragStore.selectMessage"
           @focus-evidence="focusEvidenceFromMessage"
+          @preview-evidence="previewEvidenceFromMessage"
         />
 
         <div v-if="ragStore.isLoading" class="chat-loading">
@@ -128,6 +129,13 @@ function focusEvidenceFromMessage(payload) {
     ragStore.selectMessage(payload.messageId)
   }
   graphStore.focusEvidenceItem(payload.evidence)
+}
+
+function previewEvidenceFromMessage(payload) {
+  if (!payload?.evidence) return
+  if (payload.messageId && ragStore.activeMessageId !== payload.messageId) {
+    ragStore.selectMessage(payload.messageId)
+  }
   evidencePreview.value = {
     fileName: payload.evidence.fileName,
     paragraphIndex: payload.evidence.paragraphIndex,

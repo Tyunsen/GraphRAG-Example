@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import { getDB, saveToDiskSync } from './db.js'
 import { syncWorkspaceGraph } from './graphdb.js'
 import { buildKnowledgeRecords, rebuildCanonicalGraph, splitIntoParagraphs } from './knowledgePipeline.js'
+import { buildQueryPlan } from '../shared/queryPlanner.js'
 
 function allRows(sql, params = []) {
   const db = getDB()
@@ -497,11 +498,53 @@ function isMeaningfulSearchKeyword(keyword = '') {
   return true
 }
 
-function scoreParagraph(paragraph, keywords = [], linkedNodes = [], linkedEvents = []) {
+function normalizeSearchPayload(input = {}) {
+  if (Array.isArray(input)) {
+    return {
+      query: '',
+      keywords: input,
+      queryPlan: buildQueryPlan(input.join(' ')),
+      graphCandidates: [],
+      maxResults: 12
+    }
+  }
+
+  const keywords = Array.isArray(input?.keywords) ? input.keywords : []
+  const query = String(input?.query || '').trim()
+  return {
+    query,
+    keywords,
+    queryPlan: input?.queryPlan || buildQueryPlan(query || keywords.join(' ')),
+    graphCandidates: Array.isArray(input?.graphCandidates) ? input.graphCandidates : [],
+    maxResults: Math.max(1, Number(input?.maxResults || 12))
+  }
+}
+
+function buildLinkedTypeMap(graphId) {
+  const rows = allRows('SELECT label, type FROM nodes WHERE graphId = ?', [graphId])
+  const map = new Map()
+  for (const row of rows) {
+    map.set(String(row.label || '').trim(), String(row.type || '').trim())
+  }
+  return map
+}
+
+function includesAny(text = '', candidates = []) {
+  return candidates.some(item => {
+    const normalized = normalizeSearchKeyword(item)
+    return normalized && text.includes(normalized)
+  })
+}
+
+function scoreParagraph(paragraph, linkedNodes = [], linkedEvents = [], options = {}) {
   const contentLower = String(paragraph || '').toLowerCase()
   let score = 0
   const matchedKeywords = []
-  const meaningfulKeywords = keywords.filter(isMeaningfulSearchKeyword)
+  const meaningfulKeywords = (options.keywords || []).filter(isMeaningfulSearchKeyword)
+  const targetTerms = (options.queryPlan?.targetTerms || []).filter(isMeaningfulSearchKeyword)
+  const graphCandidates = (options.graphCandidates || []).filter(Boolean)
+  const linkedTypeMap = options.linkedTypeMap || new Map()
+  const queryType = String(options.queryPlan?.queryType || '')
 
   for (const keyword of meaningfulKeywords) {
     const normalized = normalizeSearchKeyword(keyword)
@@ -518,14 +561,71 @@ function scoreParagraph(paragraph, keywords = [], linkedNodes = [], linkedEvents
     }
   }
 
+  for (const term of targetTerms) {
+    const normalized = normalizeSearchKeyword(term)
+    if (!normalized) continue
+    if (contentLower.includes(normalized)) {
+      score += 4
+    }
+    if (linkedNodes.some(label => normalizeSearchKeyword(label).includes(normalized))) {
+      score += 5
+    }
+    if (linkedEvents.some(label => normalizeSearchKeyword(label).includes(normalized))) {
+      score += 6
+    }
+  }
+
+  for (const label of graphCandidates) {
+    if (linkedNodes.includes(label)) score += 7
+    if (linkedEvents.includes(label)) score += 8
+  }
+
+  if (queryType === 'fact.person') {
+    const hasPersonNode = linkedNodes.some(label => linkedTypeMap.get(label) === '人物')
+    if (hasPersonNode) score += 6
+    if (includesAny(contentLower, ['领导人', '领袖', '最高领袖', '总统', '总理', '继任', '接班'])) score += 5
+  }
+
+  if (queryType === 'fact.time') {
+    if (/\d{4}年|\d{1,2}月|\d{1,2}日|周[一二三四五六日天]/.test(paragraph)) score += 6
+  }
+
+  if (queryType === 'fact.location') {
+    const hasLocationNode = [...linkedNodes, ...linkedEvents].some(label => {
+      const type = linkedTypeMap.get(label)
+      return type === '地点' || type === '设施'
+    })
+    if (hasLocationNode) score += 5
+  }
+
+  if (queryType === 'reason.cause') {
+    if (includesAny(contentLower, ['导致', '因为', '由于', '使得', '推高', '引发', '造成'])) score += 5
+    if (linkedEvents.length > 0) score += 3
+  }
+
+  if (queryType === 'impact.effect') {
+    if (includesAny(contentLower, ['影响', '冲击', '后果', '波及', '外溢', '传导'])) score += 5
+    if (linkedEvents.length > 0) score += 2
+  }
+
+  if (queryType === 'overview.recent') {
+    if (linkedEvents.length > 0) score += 4
+    if (Number(options.paragraphIndex || 0) <= 6) score += 2
+    if (/\d{4}年|\d{1,2}月|\d{1,2}日/.test(paragraph)) score += 2
+  }
+
+  if (/发布时间[:：]|链接[:：]|摘要[:：]/.test(paragraph)) score -= 1
+  if (String(paragraph || '').length > 1000) score -= 1
+
   return {
     score,
     matchedKeywords: [...new Set(matchedKeywords)],
-    meaningfulKeywordCount: meaningfulKeywords.length
+    meaningfulKeywordCount: Math.max(meaningfulKeywords.length, targetTerms.length)
   }
 }
 
-export function searchWorkspaceFiles(graphId, keywords = []) {
+export function searchWorkspaceFiles(graphId, input = {}) {
+  const payload = normalizeSearchPayload(input)
   let chunks = allRows(
     `
     SELECT id, fileId, fileName, paragraphIndex, content, linkedNodes, linkedEvents
@@ -555,15 +655,22 @@ export function searchWorkspaceFiles(graphId, keywords = []) {
     )
   }
 
+  const linkedTypeMap = buildLinkedTypeMap(graphId)
   const dedupedResults = new Map()
   for (const chunk of chunks) {
     const linkedNodes = parseJson(chunk.linkedNodes, [])
     const linkedEvents = parseJson(chunk.linkedEvents, [])
     const { score, matchedKeywords, meaningfulKeywordCount } = scoreParagraph(
       chunk.content,
-      keywords,
       linkedNodes,
-      linkedEvents
+      linkedEvents,
+      {
+        keywords: payload.keywords,
+        queryPlan: payload.queryPlan,
+        graphCandidates: payload.graphCandidates,
+        linkedTypeMap,
+        paragraphIndex: chunk.paragraphIndex
+      }
     )
 
     if (score <= 0) continue
@@ -604,5 +711,11 @@ export function searchWorkspaceFiles(graphId, keywords = []) {
 
   const results = [...dedupedResults.values()]
   results.sort((a, b) => b.score - a.score || a.paragraphIndex - b.paragraphIndex)
-  return results.slice(0, 12)
+  if (results.length === 0) return []
+
+  const topScore = results[0].score
+  const minAcceptedScore = Math.max(6, topScore - 4)
+  return results
+    .filter(item => item.score >= minAcceptedScore)
+    .slice(0, payload.maxResults)
 }

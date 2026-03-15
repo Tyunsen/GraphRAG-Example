@@ -1,5 +1,5 @@
-import { extractKeywords } from '@/utils/textTokenizer'
-import { findSeedNodes } from './graphService'
+import { buildQueryPlan } from '../../shared/queryPlanner.js'
+import { findGraphCandidatesByPlan, findSeedNodes } from './graphService'
 import { fetchWorkspaceContext, searchFiles } from './apiClient'
 import { filterDisplayableLabels, isDisplayableGraphLabel, isDisplayableRelationLabel } from '@/utils/graphLabelFilter'
 
@@ -18,36 +18,65 @@ function getVisibleSubgraph(subgraph) {
   return { nodes, edges }
 }
 
+function getRetrievalDepth(queryPlan, settings) {
+  if (queryPlan.retrievalMode === 'path') {
+    return Math.max(2, Number(settings.bfsDepth || 2))
+  }
+  if (queryPlan.retrievalMode === 'overview') {
+    return Math.max(2, Number(settings.bfsDepth || 2))
+  }
+  return 1
+}
+
+function hasUsableEvidence(evidence = [], subgraph = { nodes: [] }) {
+  if (!Array.isArray(evidence) || evidence.length === 0) return false
+  const topScore = Number(evidence[0]?.score || 0)
+  if (topScore >= 10) return true
+  return subgraph.nodes.length > 0 && topScore >= 6
+}
+
 export async function retrieveContext(graphStore, query, settings) {
-  const keywords = extractKeywords(query)
-  if (keywords.length === 0) return null
+  const queryPlan = buildQueryPlan(query)
+  if (queryPlan.expandedTerms.length === 0) return null
 
   const graphId = graphStore.currentGraphId
+  const candidateNodes = findGraphCandidatesByPlan(graphStore, queryPlan, 12)
+  const graphCandidateLabels = candidateNodes.map(node => node.label)
   let evidence = []
   if (graphId) {
     try {
-      evidence = await searchFiles(graphId, keywords)
+      evidence = await searchFiles(graphId, {
+        query,
+        keywords: queryPlan.expandedTerms,
+        queryPlan,
+        graphCandidates: graphCandidateLabels,
+        maxResults: queryPlan.retrievalMode === 'overview' ? 6 : 4
+      })
     } catch (error) {
       console.warn('[ragRetriever] evidence search failed:', error.message)
     }
   }
 
   const evidenceLabels = dedupe(
-    evidence.flatMap(item => [
-      ...filterDisplayableLabels(item.linkedNodes || []),
-      ...filterDisplayableLabels(item.linkedEvents || [])
-    ])
+    [
+      ...graphCandidateLabels,
+      ...evidence.flatMap(item => [
+        ...filterDisplayableLabels(item.linkedNodes || []),
+        ...filterDisplayableLabels(item.linkedEvents || [])
+      ])
+    ]
   )
 
   let subgraph = { nodes: [], edges: [] }
   let seedIds = []
   if (graphId && evidenceLabels.length > 0) {
     try {
+      const maxDepth = getRetrievalDepth(queryPlan, settings)
       const serverGraph = await fetchWorkspaceContext(graphId, {
-        labels: [...keywords, ...evidenceLabels],
-        maxDepth: settings.bfsDepth,
+        labels: [...queryPlan.expandedTerms, ...evidenceLabels],
+        maxDepth,
         maxNodes: settings.bfsMaxNodes,
-        maxSeeds: 12,
+        maxSeeds: 16,
         pathLimit: 240
       })
       subgraph = {
@@ -63,18 +92,19 @@ export async function retrieveContext(graphStore, query, settings) {
   }
 
   if (subgraph.nodes.length === 0) {
-    seedIds = findSeedNodes(graphStore, [...keywords, ...evidenceLabels])
+    seedIds = findSeedNodes(graphStore, [...queryPlan.expandedTerms, ...evidenceLabels])
     if (seedIds.length > 0) {
-      subgraph = graphStore.bfsSubgraph(seedIds, settings.bfsDepth, settings.bfsMaxNodes)
+      subgraph = graphStore.bfsSubgraph(seedIds, getRetrievalDepth(queryPlan, settings), settings.bfsMaxNodes)
     }
   }
 
   const visibleSubgraph = getVisibleSubgraph(subgraph)
-  if (evidence.length === 0 && visibleSubgraph.nodes.length === 0) return null
+  if (!hasUsableEvidence(evidence, visibleSubgraph)) return null
 
   return {
     text: formatEvidenceContext(evidence, visibleSubgraph),
-    keywords,
+    keywords: queryPlan.expandedTerms,
+    queryPlan,
     seedIds,
     subgraph: visibleSubgraph,
     evidence,

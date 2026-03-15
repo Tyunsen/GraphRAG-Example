@@ -6,6 +6,7 @@
         v-if="msg.context"
         :context="msg.context"
         @focus-evidence="$emit('focus-evidence', { messageId: msg.id, evidence: $event })"
+        @preview-evidence="$emit('preview-evidence', { messageId: msg.id, evidence: $event })"
       />
     </div>
     <div class="msg-time">{{ formatTime(msg.timestamp) }}</div>
@@ -20,7 +21,7 @@ defineProps({
   active: { type: Boolean, default: false }
 })
 
-defineEmits(['select', 'focus-evidence'])
+defineEmits(['select', 'focus-evidence', 'preview-evidence'])
 
 function formatTime(ts) {
   const d = new Date(ts)

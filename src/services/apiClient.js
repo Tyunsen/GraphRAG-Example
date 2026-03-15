@@ -152,9 +152,9 @@ export async function deleteFileApi(graphId, fileId) {
   })
 }
 
-export async function searchFiles(graphId, keywords) {
+export async function searchFiles(graphId, payload) {
   return request(`/files/${graphId}/search`, {
     method: 'POST',
-    body: JSON.stringify({ keywords })
+    body: JSON.stringify(payload)
   })
 }

@@ -79,8 +79,7 @@ router.delete('/detail/:fileId', async (req, res) => {
 
 router.post('/:graphId/search', (req, res) => {
   try {
-    const { keywords = [] } = req.body || {}
-    res.json(searchWorkspaceFiles(req.params.graphId, keywords))
+    res.json(searchWorkspaceFiles(req.params.graphId, req.body || {}))
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
