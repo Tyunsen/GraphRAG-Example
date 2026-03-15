@@ -76,6 +76,11 @@ const KEYWORD_ALIASES = {
   乌克兰: ['乌克兰', '乌方', '基辅']
 }
 
+const GENERIC_INTENT_TERMS = new Set([
+  '表态', '行动', '影响', '动向', '局势', '动态', '情况', '问题', '事件', '资料', '信息',
+  '内容', '主题', '范围', '对象', '相关', '后果', '变化', '消息', '趋势'
+])
+
 function dedupe(values = []) {
   return [...new Set(values.filter(Boolean))]
 }
@@ -93,6 +98,7 @@ function splitConstraintTerms(value = '') {
       .split(/[、，,；;和与及/\s]+/)
       .map(item => item.trim())
       .filter(item => item.length >= 2)
+      .filter(item => !GENERIC_INTENT_TERMS.has(item))
   )
 }
 
@@ -129,7 +135,7 @@ function deriveImplicitKeywords(intentSource = '', focusTopics = []) {
 
   for (const topic of focusTopics) {
     const normalized = normalizeIntentKeyword(topic)
-    if (normalized.length >= 2) derived.push(normalized)
+    if (normalized.length >= 2 && !GENERIC_INTENT_TERMS.has(normalized)) derived.push(normalized)
   }
 
   return dedupe(derived)
