@@ -42,6 +42,12 @@ function normalizeTitle(title, query) {
   return cleaned
 }
 
+function isInsufficientAnswer(answer = '') {
+  const text = String(answer || '').trim()
+  if (!text) return false
+  return /现有证据不足|不足以回答|未检索到有效证据|没有找到直接相关的证据/.test(text)
+}
+
 async function generateSessionTitle(settings, query, answer) {
   try {
     const title = (await callLLM(
@@ -123,8 +129,9 @@ export function useRagQuery() {
 
       const messages = buildRAGMessages(context.text, query)
       const answer = sanitizeRAGAnswer(await callLLM(settings, messages))
+      const finalContext = isInsufficientAnswer(answer) ? null : context
 
-      const assistantMessage = await ragStore.addMessage('assistant', answer, context)
+      const assistantMessage = await ragStore.addMessage('assistant', answer, finalContext)
       await refreshSessionTitle(ragStore.currentSession, [
         { role: 'user', content: query },
         { role: 'assistant', content: answer }
@@ -132,6 +139,11 @@ export function useRagQuery() {
 
       if (assistantMessage?.id) {
         ragStore.selectMessage(assistantMessage.id)
+      }
+
+      if (!finalContext) {
+        graphStore.clearHighlights()
+        graphStore.showFullGraph()
       }
     } catch (e) {
       await ragStore.addMessage('assistant', `查询失败：${e.message}`)

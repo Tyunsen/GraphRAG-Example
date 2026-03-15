@@ -70,6 +70,11 @@ export async function retrieveContext(graphStore, query, settings) {
     ...candidateNodes.map(node => node.label),
     ...neighborhoodCandidates.map(node => node.label)
   ]).slice(0, 16)
+
+  if (graphId && graphCandidateLabels.length === 0) {
+    return null
+  }
+
   let evidence = []
   if (graphId) {
     try {
