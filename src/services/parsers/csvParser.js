@@ -1,4 +1,5 @@
 import Papa from 'papaparse'
+import { looksLikeEntityTable, looksLikeGraphLabel } from './graphImportHeuristics.js'
 
 /**
  * CSV Parser
@@ -63,7 +64,7 @@ function parseTripleCSV(rows, fields) {
     const pred = String(row[predField] || '').trim()
     const obj = String(row[objField] || '').trim()
 
-    if (!subj || !obj) continue
+    if (!looksLikeGraphLabel(subj) || !looksLikeGraphLabel(obj)) continue
 
     if (!nodeSet.has(subj)) {
       nodeSet.set(subj, {
@@ -95,7 +96,7 @@ function parseEdgeCSV(rows, fields) {
   for (const row of rows) {
     const src = String(row[srcField] || '').trim()
     const tgt = String(row[tgtField] || '').trim()
-    if (!src || !tgt) continue
+    if (!looksLikeGraphLabel(src) || !looksLikeGraphLabel(tgt)) continue
 
     if (!nodeSet.has(src)) nodeSet.set(src, { label: src, type: 'entity' })
     if (!nodeSet.has(tgt)) nodeSet.set(tgt, { label: tgt, type: 'entity' })
@@ -112,13 +113,16 @@ function parseEdgeCSV(rows, fields) {
 }
 
 function parseEntityCSV(rows, fields) {
-  const labelField = findField(fields, 'label', 'name', 'entity', 'title') || fields[0]
+  const labelField = findField(fields, 'label', 'name', 'entity') || fields[0]
   const typeField = findField(fields, 'type', 'category', 'group', 'class')
+  if (!looksLikeEntityTable(rows, labelField, fields)) {
+    return { nodes: [], edges: [] }
+  }
 
   const nodes = []
   for (const row of rows) {
     const label = String(row[labelField] || '').trim()
-    if (!label) continue
+    if (!looksLikeGraphLabel(label)) continue
 
     const properties = {}
     for (const f of fields) {

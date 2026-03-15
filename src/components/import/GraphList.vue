@@ -50,7 +50,7 @@
               <div class="field-head">
                 <div class="field-title-row">
                   <label class="field-label" for="workspace-name">工作区名称</label>
-                  <span class="field-hint">显示在左侧列表</span>
+                  <span class="field-hint">左侧列表显示名</span>
                 </div>
               </div>
               <input
@@ -65,7 +65,7 @@
               <div class="field-head">
                 <div class="field-title-row">
                   <label class="field-label" for="workspace-intent">工作区意图</label>
-                  <span class="field-hint">决定抽取范围和问答边界</span>
+                  <span class="field-hint">决定抽取范围和检索边界</span>
                 </div>
               </div>
               <textarea
@@ -80,14 +80,11 @@
               <div class="field-head field-head-inline">
                 <div>
                   <label class="field-label" for="workspace-prompt">抽取提示词</label>
-                  <div class="field-copy">这是发给大模型的抽取指令。留空时，系统会按当前工作区意图自动生成。</div>
+                  <div class="field-copy">这是实际发送给模型的抽取指令。可以先用 AI 生成，再手动修改。</div>
                 </div>
                 <div class="field-actions">
                   <button class="mini-btn" type="button" :disabled="!form.intentQuery.trim() || generatingPrompt" @click="generatePrompt">
-                    {{ generatingPrompt ? '生成中...' : '按意图生成' }}
-                  </button>
-                  <button class="mini-btn mini-btn-ghost" type="button" @click="resetPromptToAuto">
-                    改回自动生成
+                    {{ generatingPrompt ? '生成中...' : 'AI 生成提示词' }}
                   </button>
                 </div>
               </div>
@@ -184,10 +181,6 @@ async function generatePrompt() {
   } finally {
     generatingPrompt.value = false
   }
-}
-
-function resetPromptToAuto() {
-  form.extractionPrompt = ''
 }
 
 async function submitPanel() {
@@ -381,12 +374,12 @@ defineExpose({ openCreatePanel })
   width: min(920px, calc(100vw - 40px));
   max-height: calc(100vh - 48px);
   display: grid;
-  gap: 20px;
+  gap: 18px;
   padding: 28px;
-  border-radius: 28px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 248, 251, 0.98));
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.22);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.99);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
   overflow: auto;
 }
 
@@ -404,9 +397,9 @@ defineExpose({ openCreatePanel })
 }
 
 .workspace-subtitle {
-  margin-top: 8px;
-  font-size: 13px;
-  line-height: 1.7;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
   color: var(--color-text-secondary);
 }
 
@@ -422,7 +415,7 @@ defineExpose({ openCreatePanel })
 .workspace-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 14px;
+  gap: 18px;
 }
 
 .workspace-section {
@@ -441,7 +434,7 @@ defineExpose({ openCreatePanel })
 
 .field-head {
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
 .field-head-inline {
@@ -459,21 +452,22 @@ defineExpose({ openCreatePanel })
 }
 
 .field-label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.01em;
 }
 
 .field-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
 .field-copy {
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--color-text-secondary);
+  max-width: 520px;
 }
 
 .field-actions {
@@ -503,19 +497,20 @@ defineExpose({ openCreatePanel })
 }
 
 .workspace-name {
-  height: 56px;
-  padding: 16px 18px;
+  height: 60px;
+  padding: 17px 18px;
   border-radius: 14px;
   border: 1px solid rgba(148, 163, 184, 0.36);
   background: rgba(255, 255, 255, 1);
   box-shadow: none;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--color-text);
 }
 
 .workspace-intent {
-  height: 148px;
+  min-height: 168px;
+  height: 168px;
   resize: none;
   padding: 16px 18px;
   border-radius: 14px;
@@ -528,14 +523,14 @@ defineExpose({ openCreatePanel })
 }
 
 .workspace-prompt {
-  min-height: 280px;
+  min-height: 320px;
   resize: vertical;
   padding: 16px 18px;
   border-radius: 14px;
   border: 1px solid rgba(148, 163, 184, 0.3);
   background: rgba(255, 255, 255, 1);
   box-shadow: none;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.7;
   font-family: var(--font-mono);
 }

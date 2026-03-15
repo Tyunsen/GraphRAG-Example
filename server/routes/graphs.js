@@ -3,7 +3,7 @@ import { getDB, saveToDisk, saveToDiskSync } from '../db.js'
 import { deleteWorkspaceGraph, queryWorkspaceSubgraph, syncWorkspaceGraph } from '../graphdb.js'
 import { syncWorkspaceCounts } from '../fileGraphService.js'
 import { makeStableId, rebuildCanonicalGraph } from '../knowledgePipeline.js'
-import { buildExtractionPrompt, buildIntentProfile } from '../workspaceIntent.js'
+import { buildExtractionPrompt, buildIntentProfile, generateExtractionPrompt } from '../workspaceIntent.js'
 
 const router = Router()
 
@@ -485,7 +485,7 @@ router.get('/', async (req, res) => {
   }
 })
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const now = Date.now()
     const {
@@ -502,7 +502,13 @@ router.post('/', (req, res) => {
     }
 
     const intentProfile = buildIntentProfile(intentQuery, intentSummary)
-    const nextExtractionPrompt = String(extractionPrompt || '').trim() || buildExtractionPrompt(intentQuery, intentSummary, intentProfile)
+    const promptResult = String(extractionPrompt || '').trim()
+      ? { extractionPrompt: String(extractionPrompt || '').trim(), intentProfile }
+      : await generateExtractionPrompt(intentQuery, intentSummary, {
+        name,
+        intentProfile
+      })
+    const nextExtractionPrompt = promptResult.extractionPrompt
     run(
       `
       INSERT INTO graphs (id, name, intentQuery, intentSummary, intentProfile, extractionPrompt, nodeCount, edgeCount, createdAt, updatedAt)
@@ -527,7 +533,7 @@ router.post('/', (req, res) => {
   }
 })
 
-router.post('/prompt-preview', (req, res) => {
+router.post('/prompt-preview', async (req, res) => {
   try {
     const {
       name = '',
@@ -539,14 +545,17 @@ router.post('/prompt-preview', (req, res) => {
       return res.status(400).json({ error: 'intentQuery is required' })
     }
 
-    const intentProfile = buildIntentProfile(intentQuery, intentSummary)
-    const extractionPrompt = buildExtractionPrompt(
-      [String(name || '').trim(), String(intentQuery || '').trim()].filter(Boolean).join(' '),
-      intentSummary,
-      intentProfile
-    )
+    const promptResult = await generateExtractionPrompt(intentQuery, intentSummary, {
+      name,
+      intentProfile: buildIntentProfile(intentQuery, intentSummary)
+    })
 
-    res.json({ intentProfile, extractionPrompt })
+    res.json({
+      intentProfile: promptResult.intentProfile,
+      extractionPrompt: promptResult.extractionPrompt,
+      generator: promptResult.generator,
+      usedFallback: promptResult.usedFallback
+    })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -699,7 +708,10 @@ router.put('/:id', async (req, res) => {
     const nextIntentProfile = buildIntentProfile(nextIntentQuery, nextIntentSummary)
     const nextExtractionPrompt = String(extractionPrompt || '').trim()
       || existing?.extractionPrompt
-      || buildExtractionPrompt(nextIntentQuery, nextIntentSummary, nextIntentProfile)
+      || (await generateExtractionPrompt(nextIntentQuery, nextIntentSummary, {
+        name: nextName,
+        intentProfile: nextIntentProfile
+      })).extractionPrompt
 
     if (existing) {
       run('DELETE FROM nodes WHERE graphId = ?', [id])
@@ -820,7 +832,11 @@ router.patch('/:id', async (req, res) => {
     } = req.body || {}
 
     const intentProfile = buildIntentProfile(intentQuery, intentSummary)
-    const nextExtractionPrompt = String(extractionPrompt || '').trim() || buildExtractionPrompt(intentQuery, intentSummary, intentProfile)
+    const nextExtractionPrompt = String(extractionPrompt || '').trim()
+      || (await generateExtractionPrompt(intentQuery, intentSummary, {
+        name,
+        intentProfile
+      })).extractionPrompt
     run(
       'UPDATE graphs SET name = ?, intentQuery = ?, intentSummary = ?, intentProfile = ?, extractionPrompt = ?, updatedAt = ? WHERE id = ?',
       [name, intentQuery, intentSummary, JSON.stringify(intentProfile), nextExtractionPrompt, Date.now(), req.params.id]

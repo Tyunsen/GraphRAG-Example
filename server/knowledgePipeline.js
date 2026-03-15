@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { sanitizeGraphLabel } from './graphSanitizer.js'
 
 const EVENT_NODE_TYPE = '事件'
 const AGENT_RELATIONS = new Set(['发起', '执行', '参与', '宣布', '支持', '领导', '指挥'])
@@ -607,10 +608,11 @@ function buildPreparedNodes(extractedNodes = [], extractedEdges = []) {
   const nodeMap = new Map()
 
   for (const node of extractedNodes || []) {
-    const label = String(node?.label || '').trim()
+    const rawType = normalizeNodeType(node?.type)
+    const label = sanitizeGraphLabel(node?.label || '', rawType)
     if (!label) continue
 
-    const type = normalizeNodeType(node.type)
+    const type = rawType
     const properties = isObject(node.properties) ? node.properties : {}
     const existing = nodeMap.get(label)
 
@@ -624,8 +626,8 @@ function buildPreparedNodes(extractedNodes = [], extractedEdges = []) {
   }
 
   for (const edge of extractedEdges || []) {
-    const source = String(edge?.source || '').trim()
-    const target = String(edge?.target || '').trim()
+    const source = sanitizeGraphLabel(edge?.source || '', '')
+    const target = sanitizeGraphLabel(edge?.target || '', '')
     if (source && !nodeMap.has(source)) nodeMap.set(source, { label: source, type: 'default', properties: {} })
     if (target && !nodeMap.has(target)) nodeMap.set(target, { label: target, type: 'default', properties: {} })
   }
@@ -639,8 +641,9 @@ function buildPreparedNodes(extractedNodes = [], extractedEdges = []) {
       ...coerceStringArray(properties.object),
       ...coerceStringArray(properties.location)
     ]) {
-      if (!label || nodeMap.has(label)) continue
-      nodeMap.set(label, { label, type: 'default', properties: {} })
+      const normalized = sanitizeGraphLabel(label, '')
+      if (!normalized || nodeMap.has(normalized)) continue
+      nodeMap.set(normalized, { label: normalized, type: 'default', properties: {} })
     }
   }
 
@@ -807,14 +810,20 @@ export function buildKnowledgeRecords(
         ...inbound
           .filter(edge => edge.sourceType !== EVENT_NODE_TYPE && AGENT_RELATIONS.has(edge.label))
           .map(edge => `entity:${normalizeAliasToken(edge.source)}`),
-        ...coerceStringArray(properties.subject).map(item => `entity:${normalizeAliasToken(item)}`)
+        ...coerceStringArray(properties.subject)
+          .map(item => sanitizeGraphLabel(item, ''))
+          .filter(Boolean)
+          .map(item => `entity:${normalizeAliasToken(item)}`)
       ])
 
       const objectKeys = dedupe([
         ...outbound
           .filter(edge => edge.targetType !== EVENT_NODE_TYPE && OBJECT_RELATIONS.has(edge.label))
           .map(edge => `entity:${normalizeAliasToken(edge.target)}`),
-        ...coerceStringArray(properties.object).map(item => `entity:${normalizeAliasToken(item)}`)
+        ...coerceStringArray(properties.object)
+          .map(item => sanitizeGraphLabel(item, ''))
+          .filter(Boolean)
+          .map(item => `entity:${normalizeAliasToken(item)}`)
       ])
 
       const eventType = inferEventType(label, String(properties.eventType || '').trim())
@@ -824,7 +833,7 @@ export function buildKnowledgeRecords(
         ...inbound.map(edge => edge.label)
       ]) || trigger).trim()
       const locationText = String(
-        properties.location ||
+        sanitizeGraphLabel(properties.location || '', '') ||
         pickLongestText(outbound
           .filter(edge => edge.targetType !== EVENT_NODE_TYPE && LOCATION_RELATIONS.has(edge.label))
           .map(edge => edge.target))
@@ -921,8 +930,8 @@ export function buildKnowledgeRecords(
   }
 
   for (const edge of extractedEdges || []) {
-    const sourceLabel = String(edge?.source || '').trim()
-    const targetLabel = String(edge?.target || '').trim()
+    const sourceLabel = sanitizeGraphLabel(edge?.source || '', nodeTypeMap.get(String(edge?.source || '').trim()) || '')
+    const targetLabel = sanitizeGraphLabel(edge?.target || '', nodeTypeMap.get(String(edge?.target || '').trim()) || '')
     if (!sourceLabel || !targetLabel) continue
 
     const sourceType = normalizeNodeType(nodeTypeMap.get(sourceLabel) || '')

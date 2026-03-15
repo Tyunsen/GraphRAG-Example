@@ -1,3 +1,5 @@
+import { sanitizeGraphLabel } from './graphSanitizer.js'
+
 const MAX_TEXT_LENGTH = 6000
 const EVENT_TYPE = '事件'
 const EVENT_RELATION_LABELS = [
@@ -109,11 +111,10 @@ function extractJsonObject(text) {
 
 function normalizeNode(node) {
   if (!node || typeof node !== 'object') return null
-  const label = String(node.label || node.name || node.entity || '').trim()
-  if (!label) return null
-
   const rawType = String(node.type || node.category || 'default').trim()
   const type = /事件|event/i.test(rawType) ? EVENT_TYPE : rawType || 'default'
+  const label = sanitizeGraphLabel(node.label || node.name || node.entity || '', type)
+  if (!label) return null
   return {
     label,
     type,
@@ -135,8 +136,10 @@ function normalizeRelationLabel(label, sourceType, targetType) {
 
 function normalizeEdge(edge, nodeTypeMap) {
   if (!edge || typeof edge !== 'object') return null
-  const source = String(edge.source || edge.from || edge.subject || edge.head || '').trim()
-  const target = String(edge.target || edge.to || edge.object || edge.tail || '').trim()
+  const rawSource = String(edge.source || edge.from || edge.subject || edge.head || '').trim()
+  const rawTarget = String(edge.target || edge.to || edge.object || edge.tail || '').trim()
+  const source = sanitizeGraphLabel(rawSource, nodeTypeMap.get(rawSource) || '')
+  const target = sanitizeGraphLabel(rawTarget, nodeTypeMap.get(rawTarget) || '')
   if (!source || !target) return null
 
   const sourceType = nodeTypeMap.get(source) || ''
