@@ -596,6 +596,18 @@ function inferEventType(label = '', fallback = '') {
   return fallback || '一般事件'
 }
 
+function isWeakEventLabel(label = '', subjectKeys = [], objectKeys = [], properties = {}) {
+  const text = String(label || '').trim()
+  if (!text) return true
+  if (subjectKeys.length > 0 || objectKeys.length > 0) return false
+  if (String(properties.summary || '').trim().includes(text) && text.length >= 6) return false
+
+  const genericLabels = new Set(['升级', '影响', '行动', '谈判', '会谈', '发布', '推进', '回应', '反击'])
+  if (genericLabels.has(text)) return true
+  if (text.length <= 2) return true
+  return false
+}
+
 function coerceStringArray(value) {
   if (Array.isArray(value)) {
     return value.map(item => String(item || '').trim()).filter(Boolean)
@@ -845,6 +857,7 @@ export function buildKnowledgeRecords(
         ''
       ).trim()
       const summary = String(properties.summary || label).trim()
+      if (isWeakEventLabel(label, subjectKeys, objectKeys, properties)) continue
       const canonicalKey = canonicalizeEventKey({
         label,
         eventType,

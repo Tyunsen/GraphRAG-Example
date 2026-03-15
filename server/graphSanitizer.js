@@ -1,6 +1,12 @@
 const EVENT_TYPE = '事件'
 const MAX_ENTITY_LABEL_LENGTH = 48
 const MAX_EVENT_LABEL_LENGTH = 72
+const ENTITY_PREFIX_TERMS = ['在', '对', '将', '把', '从', '向', '为', '由', '据']
+const ENTITY_ACTION_TERMS = [
+  '要求', '表示', '曾言', '试行', '升级', '推动', '举行', '召开', '发动', '袭击',
+  '打击', '反击', '抗议', '发布', '启动', '实现', '生效', '签署', '谈判', '参加',
+  '提出', '强调', '部署', '完成'
+]
 
 function normalizeWhitespace(value = '') {
   return String(value || '')
@@ -39,6 +45,13 @@ export function isBadGraphLabel(label = '', nodeType = '') {
   const spaceCount = countMatches(text, /\s/g)
   if (spaceCount >= 8) return true
 
+  const isEvent = /事件|event/i.test(String(nodeType || '').trim())
+  if (!isEvent) {
+    if (/^[a-z]/i.test(text) && !/^[A-Z]{2,}$/.test(text)) return true
+    if (text.length >= 6 && ENTITY_PREFIX_TERMS.some(prefix => text.startsWith(prefix))) return true
+    if (text.length >= 6 && ENTITY_ACTION_TERMS.some(term => text.includes(term))) return true
+  }
+
   return false
 }
 
@@ -47,4 +60,3 @@ export function sanitizeGraphLabel(label = '', nodeType = '') {
   if (isBadGraphLabel(text, nodeType)) return ''
   return text
 }
-

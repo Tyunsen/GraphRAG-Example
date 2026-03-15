@@ -233,13 +233,16 @@ export function buildExtractionPrompt(intentQuery = '', intentSummary = '', inte
 }
 
 function sanitizeGeneratedPrompt(value = '') {
-  return String(value || '')
+  const cleaned = String(value || '')
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/^\s*让我分析[\s\S]*?(?=你是|工作区总意图|抽取要求)/, '')
     .replace(/```[\s\S]*?```/g, match => match.replace(/```/g, ''))
     .replace(/^抽取提示词[:：]?\s*/i, '')
     .trim()
-    .slice(0, 4000)
+
+  const anchor = cleaned.indexOf('你是中文知识图谱抽取器')
+  const normalized = anchor >= 0 ? cleaned.slice(anchor) : cleaned
+  return normalized.slice(0, 4000)
 }
 
 function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSummary = '', intentProfile = null }) {
