@@ -203,6 +203,12 @@ function formatRoleKeys(keys = []) {
     .join('、')
 }
 
+function formatRoleLabels(keys = []) {
+  return keys
+    .map(item => String(item || '').replace(/^(entity|event):/, '').trim())
+    .filter(Boolean)
+}
+
 function parseEventLabel(label = '') {
   const text = String(label || '').trim()
   if (!text) return { subject: '', predicate: '', object: '' }
@@ -233,11 +239,16 @@ function parseEventLabel(label = '') {
 function formatEventSvo(canonical) {
   if (!canonical) return ''
   const parsed = parseEventLabel(canonical.label || canonical.summary || '')
-  const roleSubject = formatRoleKeys(canonical.subjectKeys || [])
-  const roleObject = formatRoleKeys(canonical.objectKeys || [])
+  const predicateRaw = String(canonical.predicateText || '').trim()
+  const eventTypeRaw = String(canonical.eventType || '').trim()
+  const roleSubject = formatRoleLabels(canonical.subjectKeys || []).join('、')
+  const roleObject = formatRoleLabels(canonical.objectKeys || [])
+    .filter(item => item !== eventTypeRaw)
+    .filter(item => item !== predicateRaw)
+    .filter(item => !predicateRaw || !item.endsWith(predicateRaw))
+    .join('、')
   const predicate = (() => {
-    const raw = String(canonical.predicateText || '').trim()
-    if (raw && raw !== canonical.label) return raw
+    if (predicateRaw && predicateRaw !== canonical.label) return predicateRaw
     return parsed.predicate || String(canonical.trigger || canonical.label || '相关').trim()
   })()
   const subject = roleSubject || parsed.subject || '未知主体'
