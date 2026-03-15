@@ -137,6 +137,43 @@ function pruneUnsupportedEventMentions(graphId) {
   return true
 }
 
+function hasOrphanKnowledgeState(graphId) {
+  const entityMentionKeys = new Set(
+    allRows('SELECT DISTINCT canonicalKey FROM entity_mentions WHERE graphId = ?', [graphId])
+      .map(row => String(row.canonicalKey || '').trim())
+      .filter(Boolean)
+  )
+  const eventMentionKeys = new Set(
+    allRows('SELECT DISTINCT canonicalKey FROM event_mentions WHERE graphId = ?', [graphId])
+      .map(row => String(row.canonicalKey || '').trim())
+      .filter(Boolean)
+  )
+
+  const orphanCanonicalEntity = allRows(
+    'SELECT canonicalKey FROM canonical_entities WHERE graphId = ?',
+    [graphId]
+  ).some(row => !entityMentionKeys.has(String(row.canonicalKey || '').trim()))
+
+  const orphanCanonicalEvent = allRows(
+    'SELECT canonicalKey FROM canonical_events WHERE graphId = ?',
+    [graphId]
+  ).some(row => !eventMentionKeys.has(String(row.canonicalKey || '').trim()))
+
+  const validNodeIds = new Set([
+    ...allRows('SELECT canonicalKey FROM canonical_entities WHERE graphId = ?', [graphId]).map(row =>
+      makeStableId('n', `${graphId}|${row.canonicalKey}`)
+    ),
+    ...allRows('SELECT canonicalKey FROM canonical_events WHERE graphId = ?', [graphId]).map(row =>
+      makeStableId('n', `${graphId}|${row.canonicalKey}`)
+    )
+  ])
+
+  const orphanNode = allRows('SELECT id FROM nodes WHERE graphId = ?', [graphId])
+    .some(row => !validNodeIds.has(String(row.id || '').trim()))
+
+  return orphanCanonicalEntity || orphanCanonicalEvent || orphanNode
+}
+
 function reconcileWorkspaceSourceState(graphId) {
   const fileCount = Number(getRow('SELECT COUNT(*) AS count FROM files WHERE graphId = ?', [graphId])?.count || 0)
   if (fileCount > 0) return false
@@ -193,6 +230,7 @@ async function repairWorkspaceKnowledgeState(graphId) {
 
   const needsRepair =
     removedUnsupportedEvents ||
+    hasOrphanKnowledgeState(graphId) ||
     canonicalCount === 0 ||
     (nodeCount === 0 && edgeCount === 0) ||
     (canonicalCount > 0 && nodeCount === 0)

@@ -387,6 +387,12 @@ function buildCompletedRow(file) {
 
 function buildTaskRow(task) {
   const stage = getCurrentTaskStage(task)
+  const persistedFileId = String(
+    task?.result?.id ||
+    task?.result?.fileId ||
+    task?.result?.duplicateOf?.fileId ||
+    ''
+  ).trim()
   const state = task.status === 'error'
     ? 'error'
     : task.status === 'skipped'
@@ -397,7 +403,7 @@ function buildTaskRow(task) {
 
   return {
     rowKey: `task:${task.id}`,
-    fileId: '',
+    fileId: persistedFileId,
     taskId: task.id,
     fileName: task.fileName,
     fileSizeText: formatFileSize(task.fileSize),

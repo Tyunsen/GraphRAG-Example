@@ -158,7 +158,13 @@ watch(
 
     nodeExplainLoading.value = true
     try {
-      nodeExplain.value = await fetchNodeExplainApi(graphId, nodeId)
+      const explain = await fetchNodeExplainApi(graphId, nodeId)
+      if (explain?.canonical?.kind === 'event' && (!explain.evidence || explain.evidence.length === 0)) {
+        nodeExplain.value = null
+        graphStore.setSelectedNode(null)
+        return
+      }
+      nodeExplain.value = explain
     } catch (error) {
       console.warn('[GraphView] failed to load node explain:', error.message)
       nodeExplain.value = null

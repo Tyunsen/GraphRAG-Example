@@ -49,7 +49,7 @@ defineProps({
 const emit = defineEmits(['focus-evidence'])
 const expanded = ref(false)
 
-function truncateText(value = '', limit = 180) {
+function truncateText(value = '', limit = 120) {
   const text = String(value || '').trim()
   if (text.length <= limit) return text
   return `${text.slice(0, limit)}...`

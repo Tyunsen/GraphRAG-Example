@@ -114,7 +114,6 @@ export const useRagStore = defineStore('rag', () => {
       sessions.value = []
       currentSessionId.value = null
       messages.value = []
-      clearStoredSession(graphId)
       resetGraphView()
       return
     }
@@ -125,7 +124,7 @@ export const useRagStore = defineStore('rag', () => {
       const stored = loadStoredSessions()[graphId]
       currentSessionId.value = sessions.value.some(item => item.id === stored)
         ? stored
-        : sessions.value[0]?.id || null
+        : null
 
       if (currentSessionId.value) persistStoredSession(graphId, currentSessionId.value)
       else clearStoredSession(graphId)
