@@ -264,6 +264,44 @@ function normalizeIntentProfile(candidate = {}, baseProfile = {}) {
   }
 }
 
+function termMatchesAnchors(term = '', anchors = []) {
+  const value = normalizeText(term)
+  if (!value) return false
+  return anchors.some(anchor => {
+    const normalizedAnchor = normalizeText(anchor)
+    return normalizedAnchor && (
+      value.includes(normalizedAnchor) ||
+      normalizedAnchor.includes(value)
+    )
+  })
+}
+
+function alignGeneratedProfileWithIntent(intentQuery = '', mergedProfile = {}, baseProfile = {}) {
+  const anchorTerms = dedupe([
+    ...(baseProfile.includeKeywords || []),
+    ...(baseProfile.includeKeywordAliases || []),
+    ...splitConstraintTerms(intentQuery),
+    ...deriveImplicitKeywords(intentQuery, baseProfile.focusTopics || [])
+  ])
+
+  if (anchorTerms.length === 0) {
+    return {
+      ...mergedProfile,
+      focusTopics: dedupe([...(baseProfile.focusTopics || []), ...(mergedProfile.focusTopics || [])]),
+      includeKeywords: dedupe([...(baseProfile.includeKeywords || []), ...(mergedProfile.includeKeywords || [])])
+    }
+  }
+
+  const alignedFocusTopics = (mergedProfile.focusTopics || []).filter(item => termMatchesAnchors(item, anchorTerms))
+  const alignedIncludeKeywords = (mergedProfile.includeKeywords || []).filter(item => termMatchesAnchors(item, anchorTerms))
+
+  return {
+    ...mergedProfile,
+    focusTopics: dedupe(alignedFocusTopics.length > 0 ? [...(baseProfile.focusTopics || []), ...alignedFocusTopics] : (baseProfile.focusTopics || [])),
+    includeKeywords: dedupe(alignedIncludeKeywords.length > 0 ? [...(baseProfile.includeKeywords || []), ...alignedIncludeKeywords] : (baseProfile.includeKeywords || []))
+  }
+}
+
 export function buildExtractionPrompt(intentQuery = '', intentSummary = '', intentProfile = null) {
   const profile = intentProfile || buildIntentProfile(intentQuery, intentSummary)
   const focusTopics = formatPromptList(profile.focusTopics, '围绕工作区意图判断')
@@ -393,7 +431,11 @@ export async function generateExtractionPrompt(intentQuery = '', intentSummary =
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('invalid profile from llm')
     }
-    const mergedProfile = normalizeIntentProfile(parsed, baseProfile)
+    const mergedProfile = alignGeneratedProfileWithIntent(
+      intentQuery,
+      normalizeIntentProfile(parsed, baseProfile),
+      baseProfile
+    )
 
     return {
       extractionPrompt: buildExtractionPrompt(intentQuery, intentSummary, mergedProfile),
