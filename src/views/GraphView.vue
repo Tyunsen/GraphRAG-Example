@@ -83,7 +83,7 @@
                   <div class="graph-node-evidence-file">来源 {{ index + 1 }}</div>
                   <div class="graph-node-evidence-copy graph-node-evidence-copy-primary">
                     <span>{{ item.fileName }}</span>
-                    <span v-if="item.paragraphRefs?.length">第 {{ item.paragraphRefs.join('、') }} 段</span>
+                    <span v-if="item.paragraphRefs?.length">{{ formatParagraphRefSummary(item.paragraphRefs) }}</span>
                   </div>
                   <div v-if="nodeExplain.canonical?.kind === 'event'" class="graph-node-svo">
                     {{ formatEventSvo(nodeExplain.canonical) }}
@@ -93,6 +93,11 @@
                       v-for="paragraph in item.paragraphs.slice(0, 2)"
                       :key="`${item.fileId}-${paragraph.paragraphIndex}`"
                       class="graph-node-paragraph"
+                      role="button"
+                      tabindex="0"
+                      @click="openParagraphPreview(item.fileName, paragraph)"
+                      @keydown.enter.prevent="openParagraphPreview(item.fileName, paragraph)"
+                      @keydown.space.prevent="openParagraphPreview(item.fileName, paragraph)"
                     >
                       <div class="graph-node-paragraph-index">第 {{ paragraph.paragraphIndex }} 段</div>
                       <div class="graph-node-paragraph-content">{{ paragraph.content }}</div>
@@ -109,6 +114,21 @@
         </div>
       </template>
     </aside>
+
+    <transition name="workspace-panel">
+      <div v-if="paragraphPreview" class="workspace-overlay" @click="closeParagraphPreview">
+        <div class="workspace-card graph-paragraph-preview" @click.stop>
+          <div class="workspace-card-head">
+            <div>
+              <div class="workspace-title">{{ paragraphPreview.fileName }}</div>
+              <div class="workspace-subtitle">第 {{ paragraphPreview.paragraphIndex }} 段全文</div>
+            </div>
+            <button class="workspace-close" type="button" @click="closeParagraphPreview">关闭</button>
+          </div>
+          <div class="graph-paragraph-preview-content">{{ paragraphPreview.content }}</div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -129,6 +149,7 @@ const ragStore = useRagStore()
 const activePanel = ref('chat')
 const nodeExplain = ref(null)
 const nodeExplainLoading = ref(false)
+const paragraphPreview = ref(null)
 
 const activeMessage = computed(() =>
   ragStore.messages.find(item => item.id === ragStore.activeMessageId) || null
@@ -226,6 +247,28 @@ function formatEventSvo(canonical) {
     ? (parsed.object || '未知客体')
     : (formatRoleKeys(canonical.objectKeys || []) || parsed.object || '未知客体')
   return `${subject} -> ${predicate} -> ${object}`
+}
+
+function formatParagraphRefSummary(paragraphRefs = []) {
+  const refs = [...new Set((paragraphRefs || []).map(item => Number(item)).filter(item => Number.isInteger(item) && item > 0))]
+    .sort((a, b) => a - b)
+  if (refs.length === 0) return ''
+  const visible = refs.slice(0, 3)
+  if (refs.length <= 3) return `第 ${visible.join('、')} 段`
+  return `第 ${visible.join('、')} 等 ${refs.length} 段`
+}
+
+function openParagraphPreview(fileName, paragraph) {
+  if (!paragraph) return
+  paragraphPreview.value = {
+    fileName,
+    paragraphIndex: paragraph.paragraphIndex,
+    content: paragraph.content
+  }
+}
+
+function closeParagraphPreview() {
+  paragraphPreview.value = null
 }
 
 function closeNodeExplain() {
@@ -500,6 +543,13 @@ function closeNodeExplain() {
   border-radius: 12px;
   background: #fff;
   border: 1px solid rgba(226, 232, 240, 0.9);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.graph-node-paragraph:hover {
+  background: rgba(248, 250, 252, 0.98);
+  border-color: rgba(79, 109, 245, 0.22);
 }
 
 .graph-node-paragraph-index {
@@ -514,12 +564,81 @@ function closeNodeExplain() {
   line-height: 1.7;
   color: var(--color-text);
   white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .graph-stage {
   flex: 1;
   min-height: 0;
   padding: 12px 16px 16px;
+}
+
+.workspace-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.34);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.workspace-card {
+  width: min(920px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.99);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+  overflow: auto;
+}
+
+.workspace-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workspace-title {
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.workspace-subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.workspace-close {
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(241, 245, 249, 0.94);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.graph-paragraph-preview {
+  width: min(760px, calc(100vw - 40px));
+}
+
+.graph-paragraph-preview-content {
+  font-size: 14px;
+  line-height: 1.85;
+  color: var(--color-text);
+  white-space: pre-wrap;
 }
 
 @media (max-width: 1360px) {
