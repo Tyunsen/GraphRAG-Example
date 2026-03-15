@@ -42,6 +42,38 @@
         </button>
       </div>
     </div>
+
+    <transition name="evidence-preview">
+      <div
+        v-if="evidencePreview"
+        class="evidence-preview-overlay"
+        @click.self="closeEvidencePreview"
+      >
+        <div class="evidence-preview-card">
+          <div class="evidence-preview-header">
+            <div class="evidence-preview-meta">
+              <div class="evidence-preview-title">原文段落</div>
+              <div class="evidence-preview-subtitle">
+                {{ evidencePreview.fileName || '未命名文件' }}
+                <span v-if="Number.isInteger(evidencePreview.paragraphIndex)">
+                  · 第 {{ evidencePreview.paragraphIndex + 1 }} 段
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              class="evidence-preview-close"
+              @click="closeEvidencePreview"
+            >
+              关闭
+            </button>
+          </div>
+          <div class="evidence-preview-content">
+            {{ evidencePreview.text || '没有可显示的原文内容' }}
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -61,6 +93,7 @@ const { askQuestion } = useRagQuery()
 const inputText = ref('')
 const inputRef = ref(null)
 const messagesRef = ref(null)
+const evidencePreview = ref(null)
 const canSendMessage = computed(() => Boolean(graphStore.currentGraphId && ragStore.currentSessionId))
 const inputPlaceholder = computed(() => {
   if (!graphStore.currentGraphId) return '先选择工作区'
@@ -95,6 +128,15 @@ function focusEvidenceFromMessage(payload) {
     ragStore.selectMessage(payload.messageId)
   }
   graphStore.focusEvidenceItem(payload.evidence)
+  evidencePreview.value = {
+    fileName: payload.evidence.fileName,
+    paragraphIndex: payload.evidence.paragraphIndex,
+    text: payload.evidence.text
+  }
+}
+
+function closeEvidencePreview() {
+  evidencePreview.value = null
 }
 
 watch(
@@ -209,5 +251,103 @@ watch(inputText, () => {
 .send-btn {
   align-self: flex-end;
   min-width: 72px;
+}
+
+.evidence-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.evidence-preview-card {
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  max-height: min(78vh, 820px);
+  background: #fff;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.2);
+  overflow: hidden;
+}
+
+.evidence-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.evidence-preview-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.evidence-preview-title {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.evidence-preview-subtitle {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.evidence-preview-close {
+  flex-shrink: 0;
+  min-width: 72px;
+  padding: 8px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.evidence-preview-close:hover {
+  background: rgba(241, 245, 249, 0.9);
+}
+
+.evidence-preview-content {
+  padding: 20px 24px 24px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.evidence-preview-enter-active,
+.evidence-preview-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.evidence-preview-enter-active .evidence-preview-card,
+.evidence-preview-leave-active .evidence-preview-card {
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.evidence-preview-enter-from,
+.evidence-preview-leave-to {
+  opacity: 0;
+}
+
+.evidence-preview-enter-from .evidence-preview-card,
+.evidence-preview-leave-to .evidence-preview-card {
+  transform: translateY(8px);
+  opacity: 0;
 }
 </style>
