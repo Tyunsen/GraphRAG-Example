@@ -234,6 +234,8 @@ export function buildExtractionPrompt(intentQuery = '', intentSummary = '', inte
 
 function sanitizeGeneratedPrompt(value = '') {
   return String(value || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/^\s*让我分析[\s\S]*?(?=你是|工作区总意图|抽取要求)/, '')
     .replace(/```[\s\S]*?```/g, match => match.replace(/```/g, ''))
     .replace(/^抽取提示词[:：]?\s*/i, '')
     .trim()
@@ -259,7 +261,7 @@ function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSumm
             '你是一名中文知识图谱抽取架构师。',
             '请根据工作区名称、工作区意图和抽取范围，直接生成一段可以发给大模型的中文抽取提示词。',
             '要求这段提示词明确：抽取范围、关注实体类型、关注事件类型、允许关系、过滤噪音规则、输出 JSON 结构。',
-            '不要解释原理，不要输出 Markdown，不要出现“下面是提示词”。',
+            '不要解释原理，不要输出 Markdown，不要出现“下面是提示词”，不要输出 <think>。',
             '输出必须是最终可直接使用的提示词正文。'
           ].join('')
         },
