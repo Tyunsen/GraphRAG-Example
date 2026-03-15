@@ -254,6 +254,23 @@ function sanitizeGeneratedPrompt(value = '') {
 function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSummary = '', intentProfile = null }) {
   const profile = intentProfile || buildIntentProfile(intentQuery, intentSummary)
   const fallbackPrompt = buildExtractionPrompt(intentQuery, intentSummary, profile)
+  const requiredReturnFormat = {
+    nodes: [
+      {
+        label: '节点名',
+        type: '人物|组织|地点|设施|国家|概念|经济指标|事件',
+        properties: {}
+      }
+    ],
+    edges: [
+      {
+        source: '节点1',
+        target: '节点2',
+        label: '关系',
+        properties: {}
+      }
+    ]
+  }
 
   return {
     profile,
@@ -271,6 +288,8 @@ function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSumm
             '请根据工作区名称、工作区意图和抽取范围，直接生成一段可以发给大模型的中文抽取提示词。',
             '不要套用固定模板，不要逐字复述输入，不要输出 Markdown，不要出现“下面是提示词”，不要输出 <think>。',
             '提示词需要自然、清晰、可直接使用，但必须明确：抽取范围、重点实体类型、重点事件类型、允许关系、噪音过滤规则、输出 JSON 结构。',
+            '你生成的提示词必须明确要求下游模型只返回 { "nodes": [...], "edges": [...] }，不能改成 entities、relations、events 等其它键名。',
+            '事件节点仍然放在 nodes 中，type 必须是“事件”，关系仍然放在 edges 中。',
             '输出只保留最终提示词正文。'
           ].join('')
         },
@@ -280,7 +299,8 @@ function buildPromptGenerationMessages({ name = '', intentQuery = '', intentSumm
             workspaceName: String(name || '').trim(),
             intentQuery: String(intentQuery || '').trim(),
             intentSummary: String(intentSummary || '').trim(),
-            intentProfile: profile
+            intentProfile: profile,
+            requiredReturnFormat
           })
         }
       ]
