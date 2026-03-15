@@ -8,21 +8,22 @@
   >
     <input
       ref="fileInput"
+      :id="inputId"
       type="file"
       multiple
       accept=".json,.csv,.txt,.md,.markdown,.pdf"
       @change="onFileSelect"
-      class="file-input-overlay"
+      class="file-input-hidden"
       :disabled="disabled"
     />
 
-    <div class="file-importer-content">
+    <label class="file-importer-content" :for="disabled ? undefined : inputId">
       <div class="file-importer-title">{{ disabled ? '先补工作区意图' : '上传文件' }}</div>
       <div class="file-importer-desc">
         {{ disabled ? '没有总意图时，系统不会开始抽取。' : '拖拽到这里，或点击选择文件。' }}
       </div>
       <div class="file-importer-meta">支持 JSON / CSV / TXT / MD / PDF</div>
-    </div>
+    </label>
   </div>
 </template>
 
@@ -37,6 +38,7 @@ const emit = defineEmits(['files-selected'])
 
 const isDragging = ref(false)
 const fileInput = ref(null)
+const inputId = `file-importer-${Math.random().toString(36).slice(2, 10)}`
 
 function onDragOver() {
   if (props.disabled) return
@@ -62,7 +64,6 @@ function onFileSelect(event) {
 
 <style scoped>
 .file-importer {
-  position: relative;
   border: 1px dashed rgba(79, 109, 245, 0.28);
   border-radius: 16px;
   padding: 18px;
@@ -85,19 +86,14 @@ function onFileSelect(event) {
 }
 
 .file-importer-content {
-  position: relative;
-  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  pointer-events: none;
+  cursor: inherit;
 }
 
-.file-input-overlay {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
+.file-input-hidden {
+  display: none;
 }
 
 .file-importer-title {
@@ -117,7 +113,4 @@ function onFileSelect(event) {
   color: var(--color-text-muted);
 }
 
-.file-importer.disabled .file-input-overlay {
-  display: none;
-}
 </style>
